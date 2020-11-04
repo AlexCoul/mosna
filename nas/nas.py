@@ -4,9 +4,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 from copy import deepcopy
-import networkx as nx
-import igraph as ig
 from sklearn.utils import shuffle
+from tqdm import tqdm
 
 
 ############ Make test networks ############
@@ -90,7 +89,7 @@ def make_high_disassort_net():
     return nodes, edges
 
 def make_random_graph_2libs(nb_nodes=100, p_connect=0.1, attributes=['a', 'b', 'c'], multi_mod=False):
-
+    import networkx as nx
     # initialize the network
     G = nx.fast_gnp_random_graph(nb_nodes, p_connect, directed=False)
     pos = nx.kamada_kawai_layout(G)
@@ -252,6 +251,8 @@ def mixmat_to_columns(mixmat):
 def attributes_pairs(attributes, prefix='', medfix=' - ', suffix=''):
     """
     Make a list of unique pairs of attributes.
+    Convenient to make the names of elements of the mixing matrix 
+    that is flattened.
     """
     N = len(attributes)
     col = []
@@ -260,21 +261,89 @@ def attributes_pairs(attributes, prefix='', medfix=' - ', suffix=''):
             col.append(prefix + attributes[i] + medfix + attributes[j] + suffix)
     return col
 
-def randomized_mixmat(nodes, edges, attributes, n_shuffle=20):
+def core_rand_mixmat(nodes, edges, attributes):
+    nodes_rand = deepcopy(nodes)
+    nodes_rand[attributes] = shuffle(nodes_rand[attributes].values)
+    mixmat_rand = mixing_matrix(nodes_rand, edges, attributes)
+    return mixmat_rand
+
+def randomized_mixmat(nodes, edges, attributes, n_shuffle=20, parallel='max'):
+    """Randomize several times a network by shuffling the nodes' attributes.
+    Then compute the mixing matrix and the corresponding assortativity coefficient.
+    
+    Parameters
+    ----------
+    nodes : dataframe
+        Attributes of all nodes
+    edges : dataframe
+        Edges between nodes given by their index
+    attributes: list
+        Categorical attributes considered in the mixing matrix
+    n_shuffle : int (default=20)
+        Number of attributes permutations.
+    parallel : bool, int or str (default="max")
+        How parallelization is performed.
+        If False, no parallelization is done.
+        If int, use this number of cores.
+        If 'max', use the maximum number of cores.
+        If 'max-1', use the max of cores minus 1.
+       
+    Returns
+    -------
+    mixmat_rand : array (n_shuffle x n_attributes x n_attributes)
+       Mixing matrices of each randomized version of the network
+    assort_rand : array  of size n_shuffle
+       Assortativity coefficients of each randomized version of the network
+    """
     
     mixmat_rand = np.zeros((n_shuffle, len(attributes), len(attributes)))
-    for i in range(n_shuffle):
-        nodes_rand = deepcopy(nodes)
-        nodes_rand[attributes] = shuffle(nodes_rand[attributes].values)
-        mixmat_rand[i] = mixing_matrix(nodes_rand, edges, attributes)
-    return mixmat_rand
+    assort_rand = np.zeros(n_shuffle)
+    
+    if parallel is False:
+        for i in tqdm(range(n_shuffle), desc="randomization"):
+            mixmat_rand[i] = core_rand_mixmat(nodes, edges, attributes)
+            assort_rand[i] = attribute_ac(mixmat_rand[i])
+    else:
+        from multiprocessing import cpu_count
+        from dask.distributed import Client, LocalCluster
+        from dask import delayed
+        
+        # select the right number of cores
+        nb_cores = cpu_count()
+        if isinstance(parallel, int):
+            use_cores = min(parallel, nb_cores)
+        elif parallel == 'max-1':
+            use_cores = nb_cores - 1
+        elif parallel == 'max':
+            use_cores = nb_cores
+        # set up cluster and workers
+        cluster = LocalCluster(n_workers=use_cores, 
+                               threads_per_worker=1,
+                               memory_limit='50GB')
+        client = Client(cluster)
+        
+        # store the matrices-to-be
+        mixmat_delayed = []
+        for i in range(n_shuffle):
+            mmd = delayed(core_rand_mixmat)(nodes, edges, attributes)
+            mixmat_delayed.append(mmd)
+        # evaluate the parallel computation and return is as a 3d array
+        mixmat_rand = delayed(np.array)(mixmat_delayed).compute()
+        # only the assortativity coeff is not parallelized
+        for i in range(n_shuffle):
+            assort_rand[i] = attribute_ac(mixmat_rand[i])
+        # close workers and cluster
+        client.close()
+        cluster.close()
+            
+    return mixmat_rand, assort_rand
 
 def zscore(mat, mat_rand, axis=0, return_stats=False):
     rand_mean = mat_rand.mean(axis=axis)
     rand_std = mat_rand.std(axis=axis)
     zscore = (mat - rand_mean) / rand_std
     if return_stats:
-        return rand_mean, raand_std, zscore
+        return rand_mean, rand_std, zscore
     else:
         return zscore
 
