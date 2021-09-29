@@ -240,6 +240,7 @@ def mixmat_to_df(mixmat, attributes):
 def mixmat_to_columns(mixmat):
     """
     Flattens a mixing matrix taking only elements of the lower triangle and diagonal.
+    To revert this use `series_to_mixmat`.
     """
     N = mixmat.shape[0]
     val = []
@@ -247,6 +248,25 @@ def mixmat_to_columns(mixmat):
         for j in range(i+1):
             val.append(mixmat[i,j])
     return val
+
+def series_to_mixmat(series, medfix=' - ', discard=' Z'):
+    """
+    Convert a 1D pandas series into a 2D dataframe.
+    To revert this use `mixmat_to_columns`.
+    """
+    N = series.size
+    combi = [[x.split(medfix)[0].replace(discard, ''), x.split(medfix)[1].replace(discard, '')] for x in series.index]
+    # get unique elements of the list of mists
+    from itertools import chain 
+    uniq = [*{*chain.from_iterable(combi)}]
+    mat = pd.DataFrame(data=None, index=uniq, columns=uniq)
+    for i in series.index:
+        x = i.split(medfix)[0].replace(discard, '')
+        y = i.split(medfix)[1].replace(discard, '')
+        val = series[i]
+        mat.loc[x, y] = val
+        mat.loc[y, x] = val
+    return mat
 
 def attributes_pairs(attributes, prefix='', medfix=' - ', suffix=''):
     """
@@ -482,7 +502,7 @@ def flatten_neighbors(all_neigh):
 
     return flat_neigh
 
-def aggregate_k_neighbors(X, pairs, order=1, var_names=None):
+def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default', stat_names='default', var_sep=' '):
     """
     Compute the statistics on aggregated variables across
     the k order neighbors of each node in a network.
@@ -497,32 +517,58 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None):
         Max order of neighbors.
     var_names : list
         Names of variables of X.
+    stat_funcs : str or list of functions
+        Statistics functions to use on aggregated data. If 'default' np.mean and np.std are use.
+        All functions are used with the `axis=0` argument.
+    stat_names : str or list of str
+        Names of the statistical functions used on aggregated data.
+        If 'default' 'mean' and 'std' are used.
+    var_sep : str
+        Separation between variables names and statistical functions names
+        Default is ' '.
 
     Returns
     -------
-    aggregg : dataframe
-        Statistics of X.
+    aggreg : dataframe
+        Neighbors Aggregation Statistics of X.
         
     Examples
     --------
-    >>> pairs = vor.ridge_points[selection,:]
-    >>> genes_aggreg = aggregate_k_neighbors(X=Xpred, pairs=pairs, order=2)
+    >>> x = np.arange(5)
+    >>> X = x[np.newaxis,:] + x[:,np.newaxis] * 10
+    >>> pairs = np.array([[0, 1],
+                          [2, 3],
+                          [3, 4]])
+    >>> aggreg = aggregate_k_neighbors(X, pairs, stat_funcs=[np.mean, np.max], stat_names=['mean', 'max'], var_sep=' - ')
+    >>> aggreg.values
+    array([[ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
+           [ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
+           [25., 26., 27., 28., 29., 30., 31., 32., 33., 34.],
+           [30., 31., 32., 33., 34., 40., 41., 42., 43., 44.],
+           [35., 36., 37., 38., 39., 40., 41., 42., 43., 44.]])
     """
     
     nb_obs = X.shape[0]
     nb_var = X.shape[1]
-    aggreg = np.zeros((nb_obs, nb_var*2)) # *2 because mean and variance are stored
+    if stat_funcs == 'default':
+        stat_funcs = [np.mean, np.std]
+        if stat_names == 'default':
+            stat_names = ['mean', 'std']
+    nb_funcs = len(stat_funcs)
+    aggreg = np.zeros((nb_obs, nb_var*nb_funcs))
 
     for i in range(nb_obs):
         all_neigh = neighbors_k_order(pairs, n=i, order=order)
         neigh = flatten_neighbors(all_neigh)
-        aggreg[i,:nb_var] = X[neigh,:].mean(axis=0)
-        aggreg[i,-nb_var:] = X[neigh,:].std(axis=0)
+        for j, (stat_func, stat_name) in enumerate(zip(stat_funcs, stat_names)):
+            aggreg[i, j*nb_var : (j+1)*nb_var] = stat_func(X[neigh,:], axis=0)
     
     if var_names is None:
         var_names = [str(i) for i in range(nb_var)]
-    columns = [var + ' mean' for var in var_names] +\
-              [var + ' std' for var in var_names]
+    columns = []
+    for stat_name in stat_names:
+        stat_str = var_sep + stat_name
+        columns = columns + [var + stat_str for var in var_names]
     aggreg = pd.DataFrame(data=aggreg, columns=columns)
     
     return aggreg
