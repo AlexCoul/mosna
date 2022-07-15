@@ -1,5 +1,7 @@
 .ipynb_checkpoints
 *dask-worker-space*
 .spyproject
-data/processed
+data/
+batch*
 *__pychache__*
+*.pyc
