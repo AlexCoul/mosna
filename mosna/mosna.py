@@ -3,9 +3,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+from itertools import combinations
 from copy import deepcopy
 from sklearn.utils import shuffle
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+from scipy import stats
+from scipy.stats import ttest_ind    # Welch's t-test
+from scipy.stats import mannwhitneyu # Mann-Whitney rank test
+from scipy.stats import ks_2samp     # Kolmogorov-Smirnov statistic
+from statsmodels.stats.multitest import fdrcorrection
+import statsmodels.api as sm
+import warnings
+from sklearn.impute import KNNImputer
 
 
 ############ Make test networks ############
@@ -236,14 +246,10 @@ def attribute_ac(M):
     .. [1] M. E. J. Newman, Mixing patterns in networks,
        Physical Review E, 67 026126, 2003
     """
-    try:
-        import numpy
-    except ImportError:
-        raise ImportError(
-            "attribute_assortativity requires NumPy: http://scipy.org/ ")
+    
     if M.sum() != 1.0:
         M = M / float(M.sum())
-    M = numpy.asmatrix(M)
+    M = np.asmatrix(M)
     s = (M * M).sum()
     t = M.trace()
     r = (t - s) / (1 - s)
@@ -902,3 +908,652 @@ def make_cluster_cmap(labels, grey_pos='start'):
     cmap = ListedColormap(cmap)
     
     return cmap
+
+
+###### Survival and response statistics ######
+
+def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, verbose=1):
+    """
+    Delete or impute missing or non finite data.
+    During imputation, they are replaced by continuous values, not by binary values.
+    We correct them into int values
+
+    Parameters
+    ----------
+    data : datafrrame
+        Dataframe with nan or inf elements.
+    method : str
+        Imputation method or 'drop' to discard lines. 'mixed' allows
+        to drop lines that have more than a given threshold of non finite values,
+        then use the knn imputation method to replace the remaining non finite values.
+    thresh : int or float
+        Absolute or relative number of finite variables for a line to be conserved.
+        If 1, all variables (100%) have to be finite.
+    cat_cols : None or list
+        If not None, list of categorical columns were imputed float values 
+        are transformed to integers
+    modify_infs : bool
+        If True, inf values are also replaced by imputation, or discarded.
+    verbose : int
+        If 0 the function stays quiet.
+    
+    Return
+    ------
+    data : dataframe
+        Cleaned-up data.
+    select : If method == 'drop', returns also a boolean vector
+        to apply on potential other objects like survival data.
+    """
+    to_nan = ~np.isfinite(data.values)
+    nb_nan = to_nan.sum()
+    if nb_nan != 0:
+        if verbose > 0: 
+            print(f"There are {nb_nan} non finite values")
+        # set also inf values to nan
+        if modify_infs:
+            data[to_nan] = np.nan
+        # convert proportion threshold into absolute number of variables threshold
+        if method in ['drop', 'mixed'] and (0 < thresh <= 1):
+            thresh = thresh * data.shape[1]
+        if method in ['drop', 'mixed']:
+            # we use a custom code instead of pandas.dropna to return the boolean selector
+            count_nans = to_nan.sum(axis=1)
+            select = count_nans <= thresh
+            data = data.loc[select, :]
+        # impute non finite values (nan, +/-inf)
+        if method in ['knn', 'mixed']:
+            if verbose > 0:
+                print('Imputing data')
+            imputer = KNNImputer(n_neighbors=5, weights="distance")
+            data.loc[:,:] = imputer.fit_transform(data.values)
+            # set to intergers the imputed int-coded categorical variables
+            # note: that's fine for 0/1 variables, avoid imputing on me categories
+            if cat_cols is not None:
+                data.loc[:, cat_cols] = data.loc[:, cat_cols].round().astype(int)
+    if select is not None:
+        return data, select
+    else:
+        return data
+
+
+def make_clean_dummies(data, thresh=1, drop_first_binnary=True, verbose=1):
+    """
+    Delete missing or non finite categorical data and make dummy variables from them.
+    Contrary to pandas' `get_dummy`, here nan values are not replaced by 0.
+
+    Parameters
+    ----------
+    data : datafrrame
+        Dataframe of categorical data.
+    thresh : int or float
+        Absolute or relative number of finite variables for a line to be conserved.
+        If 1, all variables (100%) have to be finite.
+    drop_first_binnary : bool
+        If True, the first dummy variable of a binary variable is dropped.
+    verbose : int
+        If 0 the function stays quiet.
+    
+    Return
+    ------
+    df_dum : dataframe
+        Cleaned dummy variables.
+    """
+
+    # convert proportion threshold into absolute number of variables threshold
+    if (0 < thresh <= 1):
+        thresh = thresh * data.shape[1]
+    # delete colums that have too many nan
+    df_cat = data.dropna(axis=1, thresh=thresh)
+    col_nan = df_cat.isna().sum()
+
+    # one hot encoding of categories:
+    # we make the nan dummy variable otherwise nan are converted and information is lost
+    # then we manually change corresponding nan values and drop this column
+    df_dum = pd.get_dummies(df_cat, drop_first=False, dummy_na=True)
+    for col, nb_nan in col_nan.iteritems():
+        col_nan = col + '_nan'
+        if nb_nan > 0:
+            columns = [x for x in df_dum.columns if x.startswith(col + '_')]
+            df_dum.loc[df_dum[col_nan] == 1, columns] = np.nan
+        df_dum.drop(columns=[col_nan], inplace=True)
+
+    # Drop first class of binary variables for regression
+    if drop_first_binnary:
+        for col, nb_nan in col_nan.iteritems():
+            columns = [x for x in df_dum.columns if x.startswith(col + '_')]
+            if len(columns) == 2:
+                if verbose > 0: 
+                    print("dropping first class:", columns[0])
+                df_dum.drop(columns=columns[0], inplace=True)
+    return df_dum
+
+
+def binarize_data(data, zero, one):
+    """
+    Tranform specific values of an array, dataframe or index into 0s and 1s.
+    """
+    binarized = deepcopy(data)
+    binarized[binarized == zero] = 0
+    binarized[binarized == one] = 1
+    return binarized
+
+
+def convert_quanti_to_categ(data, method='median'):
+    """
+    Transform continuous data into categorical data.
+    """
+    categ = {}
+    if method == 'median':
+        for col in data.columns:
+            new_var = f'> med( {col} )'
+            new_val = data[col] > np.median(data[col])
+            categ[new_var] = new_val
+    categ = pd.DataFrame(categ)
+    return categ
+
+
+def extract_X_y(data, y_name, y_values=None, col_names=None, binarize=True):
+    """
+    Extract data corresponding to specific values of a target variable.
+    Useful to fit or train a statistical (learning) model. 
+
+    Parameters
+    ----------
+    data : dataframe
+        Data containing the X variables and target y variable
+    y_name : str
+        Name of the column or index of the target variable
+    y_values : list or None
+        List of accepted conditions to extract observations
+    col_names : list or None
+        List of variable to extract.
+    binarize : bool
+        If true and `y_values` has 2 elements, the vector `y` is
+        binarized, with the 1st and 2nd elements of `y_vallues`
+        tranformed into 0 and 1 respectivelly.
+    
+    Returns
+    -------
+    X : dataframe
+        Data corresponding to specific target y values.
+    y : array
+        The y values related to X.
+    """
+
+    if col_names is None:
+        col_names = data.columns
+    # if the y variable is in a pandas multiindex:
+    if y_name not in col_names and y_name in data.index.names:
+        X = data.reset_index()
+    else:
+        X = deepcopy(data)
+    if y_values is None:
+        y_values = X[y_name].unique()
+
+    # select desired groups
+    select = np.any([X[y_name] == i for i in y_values], axis=0)
+    y = X.loc[select, y_name]
+    X = X.loc[select, col_names]
+    if len(y_values) == 2 and binarize:
+        y = binarize_data(y, y_values[0], y_values[1])
+    return X, y
+
+
+def make_composed_variables(data, use_col=None, method='ratio', order=2):
+    """
+    Create derived or composed variables from simpler ones.
+
+    Example
+    -------
+    >>> df = pd.DataFrame({
+            'a': [1, 2, 3],
+            'b': [2, 4, 6],
+            'c': [6, 12, 18],
+        })
+    >>> mosna.make_composed_variables(df)
+     (a / b)   (a / c)   (b / c)  ((a / b) / (a / c))  ((a / b) / (b / c))  \
+    0      0.5  0.166667  0.333333                  3.0                  1.5   
+    1      0.5  0.166667  0.333333                  3.0                  1.5   
+    2      0.5  0.166667  0.333333                  3.0                  1.5   
+
+    ((a / c) / (b / c))  
+    0                  0.5  
+    1                  0.5  
+    2                  0.5 
+    """
+    
+    if use_col is None:
+        use_col = data.columns
+    if method == 'ratio':
+        combis = list(combinations(use_col, 2))
+        new_vars = {}
+        for var_1, var_2 in combis:
+            new_var_name = f"({var_1} / {var_2})"
+            new_vars[new_var_name] = data[var_1] / data[var_2]
+        new_data = pd.DataFrame(data=new_vars)
+    
+    # make higher order composed variables recursively
+    if order > 1:
+        next_data = make_composed_variables(new_data, method=method, order=order-1)
+        new_data = pd.concat([new_data, next_data], axis=1)
+
+    return new_data
+
+
+def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, composed_vars=False, 
+                    composed_order=2, test='Kolmogorov-Smirnov', fdr_method='indep', alpha=0.05):
+    
+
+    if composed_vars:
+        data = pd.concat([data, make_composed_variables(data, order=composed_order)], axis=1)
+    if markers is None:
+        markers = data.columns
+    if isinstance(group_var, str):
+        if group_var in data.columns:
+            group_var = data[group_var].values
+        elif group_var in data.index.names:
+            group_var = data.index.to_frame()[group_var]
+        else:
+            raise ValueError('The name of the group variable is not in columns nor in the index.')
+
+    select_tgt = group_var == group_tgt
+    if group_ref == 'other':
+        select_ref = group_var != group_tgt
+    else:
+        select_ref = group_var == group_ref
+    select_tgt = select_tgt.values
+    select_ref = select_ref.values
+
+    pvals = []
+    for marker in markers:
+        dist_tgt = data.loc[select_tgt, marker]
+        dist_ref = data.loc[select_ref, marker]
+        if test == 'Mann-Whitney':
+            mwu_stat, pval = mannwhitneyu(dist_tgt, dist_ref)
+        if test == 'Welch':
+            w_stat, pval = ttest_ind(dist_tgt, dist_ref, equal_var=False)
+        if test == 'Kolmogorov-Smirnov': 
+            ks_stat, pval = ks_2samp(dist_tgt, dist_ref)
+        pvals.append(pval)
+    pvals = pd.DataFrame(data=pvals, index=markers, columns=['pval'])
+
+    if fdr_method is not None:
+        rejected, pval_corr = fdrcorrection(pvals['pval'], method=fdr_method)
+        pvals['pval_corr'] = pval_corr
+    
+    return pvals
+
+
+def plot_distrib_groups(data, groups_labels, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, 
+                        max_cols=-1, exclude_vars=None, id_vars=None, var_name='variable', value_name='value', 
+                        multi_ind_to_col=False, figsize=(20, 6), fontsize=20, orientation=30, ax=None):
+    """
+    Plot the distribution of variables by groups.
+    """
+
+    # Select variables that will be plotted
+    if groups is None:
+        groups = data[groups_labels].unique()
+    if len(groups) == 2 and pval_data is not False:
+        if isinstance(pval_data, str) and pval_data == 'compute':
+            pval_data = find_DE_markers(data, groups[0], groups[1], order=0)
+        nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
+        if max_cols > 0:
+            nb_vars = min(nb_vars, max_cols)
+        var_names = pval_data.sort_values(by=pval_col, ascending=True).head(nb_vars).index
+    else:
+        var_names = data.columns
+    # filter variable_names if exclude_vars was given
+    if exclude_vars is not None:
+        var_names = [x for x in var_names if x not in exclude_vars]
+    
+    wide = data.loc[:, var_names]
+    if multi_ind_to_col:
+        if id_vars is None:
+            id_vars = wide.index.names
+        wide = wide.reset_index()
+    
+    # select desired groups
+    select = np.any([wide[groups_labels] == i for i in groups], axis=0)
+    wide = wide.loc[select, :]
+
+    long = pd.melt(
+        wide, 
+        id_vars=id_vars, 
+        value_vars=var_names,
+        var_name=var_name, 
+        value_name=value_name)
+    select = np.isfinite(long[value_name])
+    long = long.loc[select, :]
+
+    if ax is None:
+        ax_none = True
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        ax_none = False
+    if len(groups) == 2:
+        split = True
+    else:
+        split = False
+    sns.violinplot(x=var_name, y=value_name, hue=groups_labels,
+                   data=long, palette="Set2", split=split, ax=ax);
+    plt.xticks(rotation=orientation, ha='right', fontsize=fontsize);
+    plt.yticks(fontsize=fontsize);
+    if ax_none:
+        return fig, ax
+
+
+def plot_heatmap(data, obs_labels=None, groups_labels=None, groups=None, use_col=None, z_score=1, 
+                 palette=None, figsize=(10, 10), fontsize=10, xlabels_rotation=30, ax=None):
+
+    data = data.copy(deep=True)
+    if obs_labels is not None:
+        data.index = data[obs_labels]
+        data.drop(columns=[obs_labels], inplace=True)
+    if use_col is None:
+        skip_cols = [obs_labels, groups_labels]
+        use_col = [x for x in data.columns if x not in skip_cols]
+    else:
+        data = data[use_col]
+
+    if groups_labels is not None:
+        if groups is None:
+            groups = data[groups_labels].unique()        
+        # select desired groups
+        data = data.query(f'{groups_labels} in @groups')
+        # make lut group <--> color
+        if palette is None:
+            palette = sns.color_palette()
+        lut = dict(zip(groups, palette))
+        # Make the vector of colors
+        colors = data[groups_labels].map(lut)
+        data.drop(columns=[groups_labels], inplace=True)
+    else:
+        colors = None
+    
+    g = sns.clustermap(data, z_score=z_score, figsize=figsize, row_colors=colors)
+    g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
+    g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=fontsize);
+    if hasattr(g, 'ax_row_colors'):
+        g.ax_row_colors.set_xticklabels(g.ax_row_colors.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
+    return g
+
+
+def color_val_inf(val, thresh=0.05, col='green', col_back='white'):
+    """
+    Takes a scalar and returns a string with
+    the css property `'color: green'` for values
+    below a threshold, black otherwise.
+    """
+    color = col if val < thresh else col_back
+    return 'color: %s' % color
+
+
+def find_survival_variable(surv, X, reverse_response=False, return_table=True, return_model=True, model_kwargs=None, model_fit=None):
+    """
+    Fit a CoxPH model for each single variable, and detect the ones
+    that are statistically significant.
+    """
+    pass
+
+
+
+# ------ Stepwise linear / logistic regression ------
+
+def forward_regression(X, y,
+                       learner=sm.OLS, # sm.Logit
+                       threshold_in=0.05,
+                       verbose=False):
+    initial_list = []
+    included = list(initial_list)
+    while True:
+        changed=False
+        excluded = list(set(X.columns)-set(included))
+        new_pval = pd.Series(index=excluded)
+        for new_column in excluded:
+            try:
+                model = learner(y, sm.add_constant(pd.DataFrame(X[included+[new_column]]))).fit()
+                new_pval[new_column] = model.pvalues[new_column]
+            except np.linalg.LinAlgError:
+                print(f"LinAlgError with column {new_column}")
+                new_pval[new_column] = 1
+        best_pval = new_pval.min()
+        if best_pval < threshold_in:
+            best_feature = new_pval.idxmin()
+            included.append(best_feature)
+            changed=True
+            if verbose:
+                print('Add  {:30} with p-value {:.6}'.format(best_feature, best_pval))
+
+        if not changed:
+            break
+
+    return included
+
+
+def backward_regression(X, y,
+                        learner=sm.OLS,
+                        threshold_out=0.05,
+                        verbose=False):
+    included=list(X.columns)
+    while True:
+        changed=False
+        model = learner(y, sm.add_constant(pd.DataFrame(X[included]))).fit()
+        # use all coefs except intercept
+        pvalues = model.pvalues.iloc[1:]
+        worst_pval = pvalues.max() # null if pvalues is empty
+        if worst_pval > threshold_out:
+            changed=True
+            worst_feature = pvalues.idxmax()
+            included.remove(worst_feature)
+            if verbose:
+                print('Drop {:30} with p-value {:.6}'.format(worst_feature, worst_pval))
+        if not changed:
+            break
+    return included
+
+
+def stepwise_regression(X, y=None,
+                        y_name=None,
+                        y_values=None,
+                        col_names=None,
+                        learner=sm.OLS,
+                        threshold_in=0.05,
+                        threshold_out=0.05,
+                        support=1,
+                        verbose=False,
+                        ignore_warnings=True,
+                        kwargs_model={},
+                        kwargs_fit={}):
+    """
+    Parameters
+    ----------
+    suport : int
+        Minimal "support", i.e the minimal number of
+        different values (avoid only 1s, etc...)
+    """
+
+    if y is None:
+        X, y = extract_X_y(X, y_name, y_values)
+    if col_names is not None:
+        col_names = [x for x in X.columns if x in col_names]
+        X = X[col_names]
+    
+    # drop variable that don't have enough different values
+    if support > 0:
+        drop_cols = []
+        for col in X.columns:
+            uniq = X[col].value_counts()
+            if len(uniq) == 1:
+                drop_cols.append(col)
+            else:
+                # drop variables with non-most numerous values are too few
+                minority_total = uniq.sort_values(ascending=False).iloc[1:].sum()
+                if minority_total < support:
+                    drop_cols.append(col)
+        if len(drop_cols) > 0:
+            X.drop(columns=drop_cols, inplace=True)
+            if verbose:
+                print("Dropping variables with not enough support:\n", drop_cols)
+        
+    if ignore_warnings:
+        warnings.filterwarnings("ignore")
+    initial_list = []
+    included = list(initial_list)
+    # record of dropped columns to avoid infinite cycle of adding/dropping
+    drop_history = []
+    
+    while True:
+        changed = False
+        # ------ Forward selection ------
+        excluded = list(set(X.columns) - set(included))
+        new_pval = pd.Series(index=excluded)
+        for new_column in excluded:
+            try:
+                model = learner(y, sm.add_constant(pd.DataFrame(X[included+[new_column]])), **kwargs_model).fit(**kwargs_fit)
+                new_pval[new_column] = model.pvalues[new_column]
+            except np.linalg.LinAlgError:
+                print(f"LinAlgError with column {new_column}")
+                new_pval[new_column] = 1
+        best_pval = new_pval.min()
+        if best_pval < threshold_in:
+            best_feature = new_pval.idxmin()
+            included.append(best_feature)
+            changed = True
+            if verbose:
+                print('Add  {:30} with p-value {:.6}'.format(best_feature, best_pval))
+            
+            # ------ Backward selection ------
+            while True:
+                back_changed = False
+                model = learner(y, sm.add_constant(pd.DataFrame(X[included])), **kwargs_model).fit(**kwargs_fit)
+                # use all coefs except intercept
+                pvalues = model.pvalues.iloc[1:]
+                worst_pval = pvalues.max() # null if pvalues is empty
+                if worst_pval > threshold_out:
+                    worst_feature = pvalues.idxmax()
+                    if worst_feature in drop_history:
+                        changed = False # escape the forward/backward selection
+                        if verbose:
+                            print('Variable "{:30}" already dropped once, escaping adding/dropping cycle.'.format(worst_feature))
+                    else: 
+                        back_changed = True
+                        included.remove(worst_feature)
+                        drop_history.append(worst_feature)
+                        if verbose:
+                            print('Drop {:30} with p-value {:.6}'.format(worst_feature, worst_pval))
+                if not back_changed:
+                    break
+        
+        if not changed:
+            model = learner(y, sm.add_constant(pd.DataFrame(X[included])), **kwargs_model).fit(**kwargs_fit)
+            return model, included
+
+
+
+# ------ Risk ratios ------
+
+def relative_risk(expo, nonexpo, alpha_risk=0.05):
+    """
+    Compute the relative risk between exposed and non exposed conditions.
+    Diseases is coded as True or 1, healthy is codes as False or 0.
+    alpha is the risk, default is 0.05.
+    
+    Example
+    -------
+    >>> expo = np.array([1, 1, 0, 0])
+    >>> nonexpo = np.array([1, 0, 0, 0])
+    >>> relative_risk(expo, nonexpo)
+    """
+        
+    # number of exposed
+    Ne = expo.size
+    # number of diseased exposed
+    De = expo.sum()
+    # number of healthy exposed
+    He = Ne - De
+    # number of non-exposed
+    Nn = nonexpo.size
+    # number of diseased non-exposed
+    Dn = nonexpo.sum()
+    # number of healthy non-exposed
+    Hn = Nn - Dn
+    # relative risk
+    RR = (De / Ne) / (Dn / Nn)
+    
+    # confidence interval
+    eff = np.sqrt( He / (De * Ne) + Hn / (Dn + Nn))
+    Z_alpha = np.array(stats.norm.interval(1 - alpha_risk, loc=0, scale=1))
+    interv = np.exp( np.log(RR) + Z_alpha * eff)
+    
+    return RR, interv
+
+
+def make_expo(control, test, filter_obs=None):
+    """
+    Make arrays of exposed and non-exposed samples from a control
+    array defining the exposure (True or 1) and a test array defining
+    disease status (True or 1).
+    """
+    
+    # filter missing values
+    select = np.logical_and(np.isfinite(control), np.isfinite(test))
+    # combine with given selector
+    if filter_obs is not None:
+        select = np.logical_and(select, filter_obs)
+    control = control[select]
+    test = test[select]
+    control = control.astype(bool)
+    test = test.astype(bool)
+    
+    expo = test[control]
+    nonexpo = test[~control]
+    return expo, nonexpo
+
+
+def make_risk_ratio_matrix(data, y_name=None, y_values=None, rows=None, columns=None, 
+                           alpha_risk=0.5, col_filters={}):
+    """
+    Make the matrices of risk ratio and lower and upper bounds
+    of confidence intervals.
+    
+    col_filters is a dictionnary to select observations for a given set of columns.
+    the keys are the conditionnal columns, values are dictionaries which keys are either
+    'all' to apply selector to all target columns of several taret columns names.
+    """
+    if y_name is not None:
+        X, y = extract_X_y(data, y_name, y_values, binarize=False)
+        X[y_name] = y
+        data = X
+    if rows is None:
+        rows = data.columns
+    if columns is None:
+        columns = data.columns
+    N = len(columns)
+    rr = pd.DataFrame(data=np.zeros((N, N)), index=columns, columns=columns)
+    rr_low = rr.copy()
+    rr_high = rr.copy()
+
+    for i in rows:
+        for j in columns:
+            # i tells what variable is used to define exposure
+            # j is used to define disease status
+            if i == j:
+                rr.loc[i, j], (rr_low.loc[i, j], rr_high.loc[i, j]) = 1, (1, 1)
+            else:
+                if i in col_filters:
+                    if 'all' in col_filters[i]:
+                        filter_obs = col_filters[i]['all']
+                        expo, nonexpo = make_expo(data[i], data[j], filter_obs=filter_obs)
+                    elif j in col_filters[i]:
+                        filter_obs = col_filters[i][j]
+                        expo, nonexpo = make_expo(data[i], data[j], filter_obs=filter_obs)
+                    else:
+                        expo, nonexpo = make_expo(data[i], data[j])
+                else:
+                    expo, nonexpo = make_expo(data[i], data[j])
+                rr.loc[i, j], (rr_low.loc[i, j], rr_high.loc[i, j]) = relative_risk(expo, nonexpo, alpha_risk=alpha_risk)
+    # significance matrix
+    rr_sig = (rr_low > 1) | (rr_high < 1)
+    
+    return rr, rr_low, rr_high, rr_sig
