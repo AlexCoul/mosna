@@ -2,6 +2,8 @@
 *dask-worker-space*
 .spyproject
 data/
+images/
 batch*
+*.pdf
 *__pychache__*
 *.pyc
