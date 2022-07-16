@@ -509,7 +509,7 @@ def sample_assort_mixmat(nodes, edges, attributes, sample_id=None ,n_shuffle=50,
     # ------ Randomization ------
     print(f"randomization")
     np.random.seed(0)
-    mixmat_rand, assort_rand = randomized_mixmat(nodes, edges, attributes, n_shuffle=n_shuffle, parallel=False)
+    mixmat_rand, assort_rand = randomized_mixmat(nodes, edges, attributes, n_shuffle=n_shuffle, parallel=parallel)
     mixmat_mean, mixmat_std, mixmat_zscore = zscore(mixmat, mixmat_rand, return_stats=True)
     assort_mean, assort_std, assort_zscore = zscore(assort, assort_rand, return_stats=True)
 
@@ -555,7 +555,7 @@ def _select_nodes_edges_from_group(nodes, edges, group, groups):
     return nodes_sel, edges_sel
     
 def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
-                        parallel='max', memory_limit='50GB',
+                        parallel_groups='max', parallel_shuffle=False, memory_limit='50GB',
                         save_intermediate_results=False, dir_save_interm='~'):
     """
     Computed z-scored assortativity and mixing matrix elements for all
@@ -574,12 +574,15 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
         It can be a patient or sample id, chromosome number, etc...
     n_shuffle : int (default=50)
         Number of attributes permutations.
-    parallel : bool, int or str (default="max")
-        How parallelization is performed.
+    parallel_groups : bool, int or str (default="max")
+        How parallelization across groups is performed.
         If False, no parallelization is done.
         If int, use this number of cores.
         If 'max', use the maximum number of cores.
         If 'max-1', use the max of cores minus 1.
+    parallel_shuffle : bool, int or str (default="max")
+        How parallelization across shuffle rounds is performed.
+        Parameter options are identical to `parallel_groups`.
     memory_limit : str (default='50GB')
         Dask memory limit for parallelization.
     save_intermediate_results : bool (default=False)
@@ -613,15 +616,15 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
     
     groups_data = []
  
-    if parallel is False:
+    if parallel_groups is False:
         for group in tqdm(groups.unique(), desc='group'):
             # select nodes and edges of a specific group
             nodes_sel, edges_sel = _select_nodes_edges_from_group(nodes, edges, group, groups)
             # compute network statistics
             group_data = sample_assort_mixmat(nodes_sel, edges_sel, attributes, sample_id=group, 
-                                              n_shuffle=n_shuffle, parallel=parallel, memory_limit=memory_limit)
+                                              n_shuffle=n_shuffle, parallel=parallel_shuffle, memory_limit=memory_limit)
             if save_intermediate_results:
-                group_data.to_csv(os.path.join(dir_save_interm, 'network_statistics_group_{}.csv'.format(group)), 
+                group_data.to_csv(os.path.join(dir_save_interm, f'network_statistics_group_{group}.csv'), 
                                   encoding='utf-8', 
                                   index=False)
             groups_data.append(group_data)
@@ -633,11 +636,11 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
         
         # select the right number of cores
         nb_cores = cpu_count()
-        if isinstance(parallel, int):
-            use_cores = min(parallel, nb_cores)
-        elif parallel == 'max-1':
+        if isinstance(parallel_groups, int):
+            use_cores = min(parallel_groups, nb_cores)
+        elif parallel_groups == 'max-1':
             use_cores = nb_cores - 1
-        elif parallel == 'max':
+        elif parallel_groups == 'max':
             use_cores = nb_cores
         # set up cluster and workers
         cluster = LocalCluster(n_workers=use_cores, 
@@ -651,7 +654,7 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
             # individual samples z-score stats are not parallelized over shuffling rounds
             # because parallelization is already done over samples
             group_data = delayed(sample_assort_mixmat)(nodes_edges_sel[0], nodes_edges_sel[1], attributes, sample_id=group, 
-                                                       n_shuffle=n_shuffle, parallel=False) 
+                                                       n_shuffle=n_shuffle, parallel=parallel_shuffle) 
             groups_data.append(group_data)
         # evaluate the parallel computation
         networks_stats = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
