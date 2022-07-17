@@ -923,7 +923,7 @@ def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, 
 
     Parameters
     ----------
-    data : datafrrame
+    data : dataframe
         Dataframe with nan or inf elements.
     method : str
         Imputation method or 'drop' to discard lines. 'mixed' allows
@@ -968,9 +968,9 @@ def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, 
             if verbose > 0:
                 print('Imputing data')
             imputer = KNNImputer(n_neighbors=5, weights="distance")
-            data.loc[:,:] = imputer.fit_transform(data.values)
+            data.loc[:, :] = imputer.fit_transform(data.values)
             # set to intergers the imputed int-coded categorical variables
-            # note: that's fine for 0/1 variables, avoid imputing on me categories
+            # note: that's fine for 0/1 variables, avoid imputing on non binary categories
             if cat_cols is not None:
                 data.loc[:, cat_cols] = data.loc[:, cat_cols].round().astype(int)
     if select is not None:
@@ -986,7 +986,7 @@ def make_clean_dummies(data, thresh=1, drop_first_binnary=True, verbose=1):
 
     Parameters
     ----------
-    data : datafrrame
+    data : dataframe
         Dataframe of categorical data.
     thresh : int or float
         Absolute or relative number of finite variables for a line to be conserved.
@@ -1143,7 +1143,7 @@ def make_composed_variables(data, use_col=None, method='ratio', order=2):
     return new_data
 
 
-def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, composed_vars=False, 
+def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude_vars=None, composed_vars=False, 
                     composed_order=2, test='Kolmogorov-Smirnov', fdr_method='indep', alpha=0.05):
     
 
@@ -1153,6 +1153,10 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, compose
         markers = data.columns
     if isinstance(group_var, str):
         if group_var in data.columns:
+            if exclude_vars is None:
+                exclude_vars = [group_var]
+            else:
+                exclude_vars = exclude_vars + [group_var]
             group_var = data[group_var].values
         elif group_var in data.index.names:
             group_var = data.index.to_frame()[group_var]
@@ -1164,10 +1168,14 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, compose
         select_ref = group_var != group_tgt
     else:
         select_ref = group_var == group_ref
-    select_tgt = select_tgt.values
-    select_ref = select_ref.values
+    if isinstance(select_tgt, pd.Series):
+        select_tgt = select_tgt.values
+        select_ref = select_ref.values
 
     pvals = []
+    # filter variable_names if exclude_vars was given
+    if exclude_vars is not None:
+        markers = [x for x in markers if x not in exclude_vars]
     for marker in markers:
         dist_tgt = data.loc[select_tgt, marker]
         dist_ref = data.loc[select_ref, marker]
@@ -1187,7 +1195,7 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, compose
     return pvals
 
 
-def plot_distrib_groups(data, groups_labels, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, 
+def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, 
                         max_cols=-1, exclude_vars=None, id_vars=None, var_name='variable', value_name='value', 
                         multi_ind_to_col=False, figsize=(20, 6), fontsize=20, orientation=30, ax=None):
     """
@@ -1196,34 +1204,43 @@ def plot_distrib_groups(data, groups_labels, groups=None, pval_data=None, pval_c
 
     # Select variables that will be plotted
     if groups is None:
-        groups = data[groups_labels].unique()
+        groups = data[group_var].unique()
     if len(groups) == 2 and pval_data is not False:
         if isinstance(pval_data, str) and pval_data == 'compute':
-            pval_data = find_DE_markers(data, groups[0], groups[1], order=0)
+            pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, order=0)
         nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
         if max_cols > 0:
             nb_vars = min(nb_vars, max_cols)
-        var_names = pval_data.sort_values(by=pval_col, ascending=True).head(nb_vars).index
+        marker_vars = pval_data.sort_values(by=pval_col, ascending=True).head(nb_vars).index.tolist()
     else:
-        var_names = data.columns
+        marker_vars = data.columns.tolist()
     # filter variable_names if exclude_vars was given
+    if group_var in data.columns:
+        gp_in_cols = [group_var]
+        if exclude_vars is None:
+            exclude_vars = [group_var]
+        else:
+            exclude_vars = exclude_vars + [group_var]
+    else:
+        gp_in_cols = []
     if exclude_vars is not None:
-        var_names = [x for x in var_names if x not in exclude_vars]
+        marker_vars = [x for x in marker_vars if x not in exclude_vars]
     
-    wide = data.loc[:, var_names]
+    # TODO: utility function to put id variables in multi-index into columns if not already in cols
+    wide = data.loc[:, gp_in_cols + marker_vars]
+    if id_vars is None:
+        id_vars = list(wide.index.names) + gp_in_cols
     if multi_ind_to_col:
-        if id_vars is None:
-            id_vars = wide.index.names
         wide = wide.reset_index()
-    
+
     # select desired groups
-    select = np.any([wide[groups_labels] == i for i in groups], axis=0)
+    select = np.any([wide[group_var] == i for i in groups], axis=0)
     wide = wide.loc[select, :]
 
     long = pd.melt(
         wide, 
         id_vars=id_vars, 
-        value_vars=var_names,
+        value_vars=marker_vars,
         var_name=var_name, 
         value_name=value_name)
     select = np.isfinite(long[value_name])
@@ -1238,7 +1255,7 @@ def plot_distrib_groups(data, groups_labels, groups=None, pval_data=None, pval_c
         split = True
     else:
         split = False
-    sns.violinplot(x=var_name, y=value_name, hue=groups_labels,
+    sns.violinplot(x=var_name, y=value_name, hue=group_var,
                    data=long, palette="Set2", split=split, ax=ax);
     plt.xticks(rotation=orientation, ha='right', fontsize=fontsize);
     plt.yticks(fontsize=fontsize);
@@ -1246,35 +1263,42 @@ def plot_distrib_groups(data, groups_labels, groups=None, pval_data=None, pval_c
         return fig, ax
 
 
-def plot_heatmap(data, obs_labels=None, groups_labels=None, groups=None, use_col=None, z_score=1, 
-                 palette=None, figsize=(10, 10), fontsize=10, xlabels_rotation=30, ax=None):
+def plot_heatmap(data, obs_labels=None, group_var=None, groups=None, 
+                 use_col=None, skip_cols=[], z_score=1, cmap=None,
+                 row_cluster=True, col_cluster=True,
+                 palette=None, figsize=(10, 10), fontsize=10, 
+                 xlabels_rotation=30, ax=None):
 
     data = data.copy(deep=True)
     if obs_labels is not None:
         data.index = data[obs_labels]
         data.drop(columns=[obs_labels], inplace=True)
     if use_col is None:
-        skip_cols = [obs_labels, groups_labels]
+        skip_cols = skip_cols + [obs_labels, group_var]
         use_col = [x for x in data.columns if x not in skip_cols]
     else:
         data = data[use_col]
 
-    if groups_labels is not None:
+    if group_var is not None:
         if groups is None:
-            groups = data[groups_labels].unique()        
+            groups = data[group_var].unique()        
         # select desired groups
-        data = data.query(f'{groups_labels} in @groups')
+        data = data.query(f'{group_var} in @groups')
         # make lut group <--> color
         if palette is None:
             palette = sns.color_palette()
         lut = dict(zip(groups, palette))
         # Make the vector of colors
-        colors = data[groups_labels].map(lut)
-        data.drop(columns=[groups_labels], inplace=True)
+        colors = data[group_var].map(lut)
+        data.drop(columns=[group_var], inplace=True)
     else:
         colors = None
     
-    g = sns.clustermap(data, z_score=z_score, figsize=figsize, row_colors=colors)
+    if cmap is None:
+        cmap = sns.diverging_palette(230, 20, as_cmap=True)
+    g = sns.clustermap(data, z_score=z_score, figsize=figsize, 
+                       row_colors=colors, cmap=cmap, center=0,
+                       row_cluster=row_cluster, col_cluster=col_cluster)
     g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=fontsize);
     if hasattr(g, 'ax_row_colors'):
