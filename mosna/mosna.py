@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import seaborn as sns
 import os
+from time import time
+import joblib
 from itertools import combinations
 from copy import deepcopy
 from sklearn.utils import shuffle
@@ -16,6 +19,16 @@ from statsmodels.stats.multitest import fdrcorrection
 import statsmodels.api as sm
 import warnings
 from sklearn.impute import KNNImputer
+import umap
+import hdbscan
+
+from multiprocessing import cpu_count
+from dask.distributed import Client, LocalCluster, progress
+from dask import delayed
+import dask
+
+from tysserand import tysserand as ty
+
 
 
 ############ Make test networks ############
@@ -865,6 +878,355 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     aggreg = pd.DataFrame(data=aggreg, columns=columns)
     
     return aggreg
+
+
+def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_sizes, processed_dir, soft_clustering=True, 
+                          var_type=None, downsample=False, aggreg_dir=None, save_dir=None, opt_str='', parallel_clustering=4,
+                          opt_args_reduc={}, opt_args_clust={}):
+    """
+    Try combinations of parameters for the Neighbors Aggregation Statistics method, 
+    including the neighbors order of aggregation, the dimensionnality in which the aggregation
+    is performed, and the minimum cluster size.
+    Results and logs are saved as soon as an intermediate result is produced.
+    
+    Example
+    -------
+    processed_dir = Path('../data/processed/CODEX_CTCL')
+    opt_str = '_samples-all_stat-mean-std'
+    """
+
+
+    if var_type is None:
+        var_type = 'markers'
+    if aggreg_dir is None:
+        aggreg_dir = processed_dir / "nas"
+    else:
+        aggreg_dir = processed_dir / aggreg_dir
+    if save_dir is None:
+        save_dir = aggreg_dir / f"screening_dim_reduc_clustering_nas_on-{var_type}{opt_str}_downsample-{downsample}"
+    else:
+        save_dir = aggreg_dir / save_dir
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    default_args_reduc = {
+        'n_neighbors': 30,
+        'metric': 'euclidean',
+        'min_dist': 0.0,
+        'random_state': 0,
+    }
+    default_args_clust = {'metric': 'euclidean'}
+
+    args_reduc = opt_args_reduc
+    for key, val in default_args_reduc.items():
+        if key not in args_reduc.keys():
+            args_reduc[key] = default_args_reduc[key]
+    args_clust = opt_args_clust
+    for key, val in default_args_clust.items():
+        if key not in args_clust.keys():
+            args_clust[key] = default_args_clust[key]
+    if downsample is False:
+        downsample = 1
+
+
+    for order in orders:
+        print("order: {}".format(order))
+        
+        # compute statistics on aggregated data across neighbors
+        file_path = aggreg_dir / 'nas_on-{var_type}{opt_str}.csv'
+        if os.path.exists(file_path):
+            print("load var_aggreg")
+            var_aggreg = pd.read_csv(file_path)
+        else:
+            print("computing var_aggreg...", end=' ')
+            var_aggreg = aggregate_k_neighbors(X=X, pairs=pairs, order=order, var_names=markers)
+            var_aggreg.to_csv(file_path, index=False)
+            print("done")
+        if downsample:
+            var_aggreg = var_aggreg.loc[::downsample, :]
+
+        # Dimension reduction for visualization
+        # embed_viz = umap.UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
+        title = f"umap_on-{var_type}{opt_str}_order-{order}_dim_clust-2"
+        file_path = str(save_dir / title) + '.csv'
+        if os.path.exists(file_path):
+            print("load embed_viz")
+            embed_viz = np.loadtxt(file_path, delimiter=',')
+        else:
+            print("computing embed_viz...", end=' ')
+            embed_viz = umap.UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
+            np.savetxt(file_path, embed_viz, fmt='%.18e', delimiter=',', newline='\n')
+            print("done")
+        
+        # Dimension reduction for clustering
+        for dim_clust in dim_clusts:
+            print("    dim_clust: {}".format(dim_clust))
+            
+            title = f"umap_on-{var_type}{opt_str}_order-{order}_dim_clust-{dim_clust}"
+            file_path = str(save_dir / title) + '.csv'
+            if os.path.exists(file_path):
+                print("    load embed_clust_orig...", end=' ')
+                embed_clust_orig = np.loadtxt(file_path, delimiter=',')
+            else:
+                print("    computing embed_clust_orig...", end=' ')
+                embed_clust_orig = umap.UMAP(**args_reduc).fit_transform(var_aggreg)
+                np.savetxt(file_path, embed_clust_orig, fmt='%.18e', delimiter=',', newline='\n')
+                print("done")
+
+            for min_cluster_size in min_cluster_sizes:
+                print(f"        min_cluster_size: {min_cluster_size}")
+
+                for sampling in [10, 1]:
+                    print(f"            sampling: {sampling}", end=', ')
+                    title = f"hdbscan_on-{var_type}_reducer-umap_nas{opt_str}_order-{order}_dim_clust-{dim_clust}_min_cluster_size-{min_cluster_size}_sampling-{sampling}"
+                    # title = f"hdbscan_reducer-umap_nas_on-{var_type}{opt_str}_order-{order}_dim_clust-{dim_clust}_min_cluster_size-{min_cluster_size}_sampling-{sampling}"
+                    if not os.path.exists(str(save_dir / title) + '.csv'):
+                        # downsample embedding
+                        select = np.full(embed_clust_orig.shape[0], False)
+                        select[::sampling] = True
+                        embed_clust = embed_clust_orig[select, :]
+                        
+                        start = time()
+                        # Clustering
+                        if soft_clustering:
+                            clusterer = hdbscan.HDBSCAN(
+                                min_cluster_size=min_cluster_size, 
+                                min_samples=None, 
+                                prediction_data=True, 
+                                core_dist_n_jobs=parallel_clustering,
+                                **args_clust,
+                            )
+                            clusterer.fit(embed_clust)
+                            soft_clusters = hdbscan.all_points_membership_vectors(clusterer)
+                            if len(soft_clusters.shape) > 1:
+                                labels_hdbs = soft_clusters.argmax(axis=1)
+                            else:
+                                labels_hdbs = soft_clusters
+                        else:
+                            clusterer = hdbscan.HDBSCAN( 
+                                min_cluster_size=min_cluster_size, 
+                                min_samples=1,
+                                core_dist_n_jobs=parallel_clustering,
+                                **args_clust,
+                            )
+                            clusterer.fit(embed_clust)
+                            labels_hdbs = clusterer.labels_
+                        nb_clust_hdbs = labels_hdbs.max() # + 1
+                        end = time()
+                        duration = end-start
+                        print("HDBSCAN has detected {} clusters in {:.2f}s".format(nb_clust_hdbs, duration))
+                        
+                        np.savetxt(str(save_dir / title) + '.csv',
+                                    labels_hdbs, 
+                                    fmt='%.18e', delimiter=',', newline='\n')
+                        title = "clusterer-" + title
+                        joblib.dump(clusterer, str(save_dir / title) + '.pkl')
+
+    print("\n\nFinished!\n\n")
+    return
+
+
+def screen_nas_parameters_parallel(
+    X, pairs, markers, orders, dim_clusts, min_cluster_sizes, processed_dir, soft_clustering=True, 
+    var_type=None, downsample=False, aggreg_dir=None, save_dir=None, opt_str='', 
+    parallel_dim='max', parallel_clust_size=False, parallel_clustering=8, memory_limit='50GB',
+    opt_args_reduc={}, opt_args_clust={}):
+    """
+    Try combinations of parameters for the Neighbors Aggregation Statistics method, 
+    including the neighbors order of aggregation, the dimensionnality in which the aggregation
+    is performed, and the minimum cluster size.
+    Results and logs are saved as soon as an intermediate result is produced.
+    
+    Example
+    -------
+    processed_dir = Path('../data/processed/CODEX_CTCL')
+    opt_str = '_samples-all_stat-mean-std'
+    """
+
+    for order in orders:
+        print("order: {}".format(order))
+        
+        # compute statistics on aggregated data across neighbors
+        file_path = aggreg_dir / 'nas_on-{var_type}{opt_str}.csv'
+        if os.path.exists(file_path):
+            var_aggreg = pd.read_csv(file_path)
+        else:
+            var_aggreg = aggregate_k_neighbors(X=X, pairs=pairs, order=order, var_names=markers)
+            var_aggreg.to_csv(file_path, index=False)
+        if downsample:
+            var_aggreg = var_aggreg.loc[::downsample, :]
+
+        # Dimension reduction for visualization
+        # embed_viz = umap.UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
+        title = f"umap_on-{var_type}{opt_str}_order-{order}_dim_clust-2"
+        file_path = str(save_dir / title) + '.csv'
+        if os.path.exists(file_path):
+            embed_viz = np.loadtxt(file_path, delimiter=',')
+        else:
+            embed_viz = umap.UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
+            np.savetxt(file_path, embed_viz, fmt='%.18e', delimiter=',', newline='\n')
+        
+        # Dimension reduction for clustering
+        # select the right number of cores
+        nb_cores = cpu_count()
+        if isinstance(parallel_dim, int):
+            use_cores = min(parallel_dim, nb_cores)
+        elif parallel_dim == 'max-1':
+            use_cores = nb_cores - 1
+        elif parallel_dim == 'max':
+            use_cores = nb_cores
+        print(f"using {use_cores} cores")
+        # # set up cluster and workers
+        cluster = LocalCluster(n_workers=use_cores, 
+                                threads_per_worker=1,
+                                memory_limit=memory_limit)
+        client = Client(cluster)
+        # client = Client(threads_per_worker=2, n_workers=nb_cores)
+
+        # dummy output for Dask
+        lazy_output = []
+        for dim_clust in dim_clusts:
+            mini_out = delayed(screen_nas_parameters)(
+                X, pairs, markers, orders=[order], dim_clusts=[dim_clust], min_cluster_sizes=min_cluster_sizes, 
+                processed_dir=processed_dir, soft_clustering=soft_clustering, var_type=var_type, downsample=downsample, 
+                aggreg_dir=aggreg_dir, save_dir=save_dir, opt_str=opt_str,parallel_clustering=parallel_clustering) 
+                # f'Screening finished for dim_clust {dim_clust}.'
+            lazy_output.append(mini_out)
+        # evaluate the parallel computation
+        # log_final = delayed(np.unique)(lazy_output).compute()
+        dask.compute(*lazy_output)
+        # lazy_output.compute()
+        # close workers and cluster
+        client.close()
+        cluster.close()
+
+    print("\n\nFinished!\n\n")
+    return
+
+
+def plot_screened_parameters(obj, cell_pos_cols, cell_type_col, orders, dim_clusts, processed_dir,
+                             min_cluster_sizes, all_edges=None, sampling=False, var_type=None, 
+                             downsample=False, aggreg_dir=None, load_dir=None, save_dir=None, opt_str=''):
+    """
+    
+    Example
+    -------
+    >>> processed_dir = Path('../data/processed/CODEX_CTCL')
+    """
+
+    # from skimage import color
+    import colorcet as cc
+  
+    if var_type is None:
+        var_type = 'markers'
+    if aggreg_dir is None:
+        aggreg_dir = processed_dir / "nas"
+    if load_dir is None:
+        load_dir = aggreg_dir / f"screening_dim_reduc_clustering_nas_on-{var_type}{opt_str}_downsample-{downsample}"
+    if save_dir is None:
+        save_dir = load_dir
+
+    sample_ids = obj['Patients'].sort_values().unique()
+
+    # For the visualization
+    plots_marker = '.'
+    size_points = 10
+    if sampling is False:
+        sampling = 1
+
+    for order in orders:
+        title = f"umap_on-{var_type}{opt_str}_order-{order}_dim_clust-2"
+        file_path = str(save_dir / title) + '.csv'
+        embed_viz = np.loadtxt(file_path, delimiter=',')
+
+        n_cell_types = obj[cell_type_col].unique().size
+        palette = sns.color_palette(cc.glasbey, n_colors=n_cell_types).as_hex()
+        palette = [mpl.colors.rgb2hex(x) for x in mpl.cm.get_cmap('tab20').colors]
+
+        for dim_clust in dim_clusts:
+            print("dim_clust: {}".format(dim_clust))
+            for min_cluster_size in min_cluster_sizes:
+                print("    min_cluster_size: {}".format(min_cluster_size))
+
+                title = f"hdbscan_on-{var_type}_reducer-umap_nas{opt_str}_order-{order}_dim_clust-{dim_clust}_min_cluster_size-{min_cluster_size}_sampling-{sampling}"
+                # title = f"hdbscan_reducer-umap_nas_on-{var_type}{opt_str}_order-{order}_dim_clust-{dim_clust}_min_cluster_size-{min_cluster_size}_sampling-{sampling}"
+                labels_hdbs = np.loadtxt(str(load_dir / title) + '.csv', delimiter=',')
+
+                # Histogram of classes
+                fig = plt.figure()
+                class_id, class_count = np.unique(labels_hdbs, return_counts=True)
+                plt.bar(class_id, class_count, width=0.8);
+                plt.title('Clusters histogram');
+                title = f"Clusters histogram - on {var_type} - order {order} - dim_clust {dim_clust} - min_cluster_size {min_cluster_size}"
+                plt.savefig(str(save_dir / title) + '.png', bbox_inches='tight', facecolor='white')
+                plt.show(block=False)
+                plt.close()   
+                
+                # make a cohort-wide cmap
+                hdbs_cmap = cc.palette["glasbey_category10"]
+                # make color mapper
+                # series to sort by decreasing order
+                uniq = pd.Series(labels_hdbs).value_counts().index.astype(int)
+                n_colors = len(hdbs_cmap)
+                labels_color_mapper = {x: hdbs_cmap[i % n_colors] for i, x in enumerate(uniq)}
+                # make list of colors
+                labels_colors = [labels_color_mapper[x] for x in labels_hdbs]
+                labels_colors = pd.Series(labels_colors)
+
+                for sample in sample_ids:
+                    print("        sample: {}".format(sample))
+                    select_sample = obj['Patients'] == sample
+                    filenames = obj.loc[select_sample, 'FileName'].unique()
+
+                    for filename in filenames:
+                        select_file = obj['FileName'] == filename
+                        select = np.logical_and(select_sample, select_file)
+
+                        # load nodes and edges
+                        if isinstance(all_edges, str):
+                            file_path = processed_dir / all_edges / f'edges_sample-{filename}.csv'
+                            pairs = pd.read_csv(file_path, dtype=int).values
+                        else:
+                            coords = obj.loc[select, cell_pos_cols].values
+                            pairs = ty.build_delaunay(coords)
+                            pairs = ty.link_solitaries(coords, pairs, method='knn', k=2)
+                        # we drop z for the 2D representation
+                        coords = obj.loc[select, ['x', 'y']].values
+
+                        # Big summary plot
+                        fig, ax = plt.subplots(1, 4, figsize=(int(7*4)+1, 7), tight_layout=False)
+                        i = 0
+                        ty.plot_network(coords, pairs, labels=obj.loc[select, 'ClusterName'], cmap_nodes=palette, marker=plots_marker, size_nodes=size_points, ax=ax[0])
+                        ax[i].set_title('Spatial map of phenotypes', fontsize=14);
+
+                        i += 1
+                        ax[i].scatter(coords[:, 0], coords[:, 1], c=labels_colors[select], marker=plots_marker, s=size_points)
+                        ax[i].set_title('Spatial map of detected areas', fontsize=14);
+                        ax[i].set_aspect('equal')
+
+                        i += 1
+                        ax[i].scatter(embed_viz[select, 0], embed_viz[select, 1], c=labels_colors[select], s=5);
+                        ax[i].set_title("HDBSCAN clustering on NAS", fontsize=14);
+                        ax[i].set_aspect('equal')
+
+                        i += 1
+                        ax[i].scatter(embed_viz[:, 0], embed_viz[:, 1], c=labels_colors);
+                        ax[i].set_title("HDBSCAN clustering on NAS of all samples", fontsize=14);
+                        ax[i].set_aspect('equal')
+                        
+                        # make plot limits equal
+                        ax[i-1].set_xlim(ax[i].get_xlim())
+                        ax[i-1].set_ylim(ax[i].get_ylim())
+
+                        suptitle = f"Spatial omics data and detected areas - mean and std - order {order} - dim_clust {dim_clust} - min_cluster_size {min_cluster_size} - sample {sample} - file {filename}";
+                        fig.suptitle(suptitle, fontsize=18)
+
+                        fig.savefig(save_dir / suptitle, bbox_inches='tight', facecolor='white', dpi=200)
+                        plt.show(block=False)
+                        plt.close()
+
+
+
 
 def make_cluster_cmap(labels, grey_pos='start'):
     """
