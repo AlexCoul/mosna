@@ -1277,17 +1277,35 @@ def make_cluster_cmap(labels, grey_pos='start'):
     return cmap
 
 
-def plot_niches_composition(cell_types, niche_ids, normalize=True):
+def make_niches_composition(var, niches, var_label='variable', normalize='total'):
     """
     Make a matrix plot of cell types composition of niches.
     """
-    df = pd.DataFrame({'cell types': cell_types,
-                        'niche IDs': niche_ids})
+    df = pd.DataFrame({var_label: var,
+                       'niches': niches})
     df['counts'] = np.arange(df.shape[0])
-    counts = df.groupby(['cell types', 'niche IDs']).count()
-    if normalize:
+    counts = df.groupby([var_label, 'niches']).count()
+    counts = counts.reset_index().pivot(var_label, 'niches', 'counts').fillna(0)
+    if normalize == 'total':
         counts = counts / df.shape[0]
-    fig = sns.heatmap(counts.reset_index().pivot('cell types', 'niche IDs', 'counts'), linewidths=.5)
+    elif normalize == 'obs':
+        # pandas has some unconvenient bradcasting behaviour otherwise
+        counts = counts.div(counts.sum(axis=1), axis=0)
+    elif normalize == 'niche':
+        counts = counts / counts.sum(axis=0)
+    
+    return counts
+
+
+def plot_niches_composition(counts=None, var=None, niches=None, var_label='variable', normalize='total'):
+    """
+    Make a matrix plot of cell types composition of niches.
+    """
+    if counts is None:
+        counts = make_niches_composition(var, niches, var_label='variable', normalize='total')
+    
+    plt.figure()
+    fig = sns.heatmap(counts, linewidths=.5, cmap=sns.color_palette("Blues", as_cmap=True))
     return fig
 
 
@@ -1583,7 +1601,7 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
     # Select variables that will be plotted
     if groups is None:
         groups = data[group_var].unique()
-    if len(groups) == 2 and pval_data is not False:
+    if len(groups) == 2 and pval_data is not None:
         if isinstance(pval_data, str) and pval_data == 'compute':
             pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, order=0)
         nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
@@ -1643,9 +1661,9 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
 
 def plot_heatmap(data, obs_labels=None, group_var=None, groups=None, 
                  use_col=None, skip_cols=[], z_score=1, cmap=None,
-                 row_cluster=True, col_cluster=True,
+                 center=None, row_cluster=True, col_cluster=True,
                  palette=None, figsize=(10, 10), fontsize=10, 
-                 xlabels_rotation=30, ax=None):
+                 xlabels_rotation=30, ax=None, return_data=False):
 
     data = data.copy(deep=True)
     if obs_labels is not None:
@@ -1673,15 +1691,23 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
         colors = None
     
     if cmap is None:
-        cmap = sns.diverging_palette(230, 20, as_cmap=True)
+        if data.values.min() < 0 and data.values.max() > 0:
+            cmap = sns.diverging_palette(230, 20, as_cmap=True)
+            center = 0
+        else:
+            cmap = sns.color_palette("Blues", as_cmap=True)
+            center = None
     g = sns.clustermap(data, z_score=z_score, figsize=figsize, 
-                       row_colors=colors, cmap=cmap, center=0,
+                       row_colors=colors, cmap=cmap, center=center,
                        row_cluster=row_cluster, col_cluster=col_cluster)
     g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=fontsize);
     if hasattr(g, 'ax_row_colors'):
         g.ax_row_colors.set_xticklabels(g.ax_row_colors.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
-    return g
+    if return_data:
+        return g, data
+    else:
+        return g
 
 
 def color_val_inf(val, thresh=0.05, col='green', col_back='white'):
