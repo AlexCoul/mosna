@@ -24,9 +24,8 @@ setup(
     packages=find_packages(exclude=['build', 'docs', 'templates', 'data']),
     include_package_data=True,
     install_requires=['matplotlib>=2.2.3', 'numpy', 'seaborn',
-                      'PySAL>=2.0,<2.1', 'pandas>=0.23,<0.24','scipy',
-                      'Pillow', 'opencv-python', 'scikit-image',
-                      'scikit-learn',
+                      'pandas>=1.4.3','scipy', 'statsmodels', 
+                      'scikit-image', 'scikit-learn',
                      ],
     keywords = 'spatial networks cells transcriptomics sociology econometrics'
 )

@@ -593,7 +593,7 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
         If int, use this number of cores.
         If 'max', use the maximum number of cores.
         If 'max-1', use the max of cores minus 1.
-    parallel_shuffle : bool, int or str (default="max")
+    parallel_shuffle : bool, int or str (default="False)
         How parallelization across shuffle rounds is performed.
         Parameter options are identical to `parallel_groups`.
     memory_limit : str (default='50GB')
@@ -622,8 +622,10 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
                                         attributes=['a', 'b', 'c'], 
                                         groups=groups, 
                                         parallel_groups=False)
-"""
+    """
+
     
+    # TODO: add selection of subset
     if not isinstance(groups, pd.Series):
         groups = pd.Series(groups).copy()
     
@@ -863,12 +865,17 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     nb_funcs = len(stat_funcs)
     aggreg = np.zeros((nb_obs, nb_var*nb_funcs))
 
+    # check if other info as source and target are in pairs and clean array
+    if pairs.shape[1] > 2:
+        print("Trimmimg additonnal columns in `pairs`")
+        pairs = pairs[:, :2].astype(int)
+    
     for i in range(nb_obs):
         all_neigh = neighbors_k_order(pairs, n=i, order=order)
         neigh = flatten_neighbors(all_neigh)
         for j, (stat_func, stat_name) in enumerate(zip(stat_funcs, stat_names)):
             aggreg[i, j*nb_var : (j+1)*nb_var] = stat_func(X[neigh,:], axis=0)
-    
+        
     if var_names is None:
         var_names = [str(i) for i in range(nb_var)]
     columns = []
@@ -928,6 +935,10 @@ def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_siz
     if downsample is False:
         downsample = 1
 
+    # check if other info as source and target are in pairs and clean array
+    if pairs.shape[1] > 2:
+        print("Trimmimg additonnal columns in `pairs`")
+        pairs = pairs[:, :2].astype(int)
 
     for order in orders:
         print("order: {}".format(order))
