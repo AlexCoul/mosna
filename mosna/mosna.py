@@ -21,6 +21,7 @@ import warnings
 from sklearn.impute import KNNImputer
 import umap
 import hdbscan
+import composition_stats as cs
 
 from multiprocessing import cpu_count
 from dask.distributed import Client, LocalCluster, progress
@@ -1304,6 +1305,13 @@ def make_niches_composition(var, niches, var_label='variable', normalize='total'
         counts = counts.div(counts.sum(axis=1), axis=0)
     elif normalize == 'niche':
         counts = counts / counts.sum(axis=0)
+    elif normalize == 'clr':
+        X = counts.values
+        # avoid null values
+        X[X == 0] = X.max() / 100000
+        # CLR tranformation
+        X_clr = cs.clr(cs.closure(X))
+        counts.loc[:, :] = X_clr
     
     return counts
 
@@ -1313,10 +1321,11 @@ def plot_niches_composition(counts=None, var=None, niches=None, var_label='varia
     Make a matrix plot of cell types composition of niches.
     """
     if counts is None:
-        counts = make_niches_composition(var, niches, var_label='variable', normalize='total')
+        counts = make_niches_composition(var, niches, var_label='variable', normalize=normalize)
     
     plt.figure()
-    fig = sns.heatmap(counts, linewidths=.5, cmap=sns.color_palette("Blues", as_cmap=True))
+    fig = sns.heatmap(counts, linewidths=.5, cmap=sns.color_palette("Blues", as_cmap=True),
+                      xticklabels=True, yticklabels=True)
     return fig
 
 
