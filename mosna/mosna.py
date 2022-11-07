@@ -1711,7 +1711,7 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
         colors = None
     
     if cmap is None:
-        if data.values.min() < 0 and data.values.max() > 0:
+        if z_score is not None or (data.values.min() < 0 and data.values.max() > 0):
             cmap = sns.diverging_palette(230, 20, as_cmap=True)
             center = 0
         else:
