@@ -22,6 +22,9 @@ from sklearn.impute import KNNImputer
 import umap
 import hdbscan
 import composition_stats as cs
+import igraph as ig
+import leidenalg as la
+import colorcet as cc
 
 from multiprocessing import cpu_count
 from dask.distributed import Client, LocalCluster, progress
@@ -1747,6 +1750,248 @@ def find_survival_variable(surv, X, reverse_response=False, return_table=True, r
     """
     pass
 
+
+def get_reducer(data, save_dir, reducer_type='umap', n_components=2, 
+                n_neighbors=15, metric='euclidean', min_dist=0.0, 
+                save_reducer=False, random_state=0, verbose=1):
+    """
+    Generate or load a dimensionality reduction (DR) model and transformed (reduced) data.
+
+    Parameters
+    ----------
+    data : ndarray
+        Dataset on which we want to apply the DR method.
+    save_dir : str or pathlib Path object
+        Directory where the DR model and transformed data are stored.
+    reducer_type : str
+        DR method, can be 'umap', for now, other ones coming soon.
+    n_components : int
+        Number of final dimensions.
+    n-neighbors : int
+        Number of closest neighbors used in various DR methods.
+    metric : str
+        Type of distance used.
+    min_dist : float
+        Minimum distance between DRed data, we usually want 0.
+    save_reducer : bool
+        Whether the reducer object is saved. 
+    random_state : int
+        Controls the random initialization of the DR model.
+    
+    Returns
+    -------
+    embedding : ndarray
+        Reduced coordinates of the dataset.
+    reducer : object
+        The DR model, its type depends on the choosen DR method.
+
+    Example
+    -------
+    In the *mosna* pipeline, `var_aggreg` is the array of aggregated statistics:
+    >>> embedding, reducer = get_reducer(data=var_aggreg, save_dir=nas_dir)
+    """
+
+    reducer_name = f"reducer-umap_dim-{n_components}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
+    file_path = save_dir / reducer_name
+    if os.path.exists(str(file_path) + '.npy'):
+        if verbose > 1: print("Loading reducer object and reduced coordinates")
+        if verbose > 2: print(str(file_path) + '.npy')
+        if verbose > 2: print(f"""
+        random_state={random_state},
+        n_components={n_components},
+        n_neighbors={n_neighbors},
+        metric={metric},
+        min_dist={min_dist},
+        """)
+        embedding = np.load(str(file_path) + '.npy')
+        if os.path.exists(str(file_path) + '.pkl'):
+            reducer = joblib.load(str(file_path) + '.pkl')
+        else:
+            reducer = None
+    else:
+        if verbose > 1: print("Computing dimensionality reduction")
+        if verbose > 2: print(f"""
+        random_state={random_state},
+        n_components={n_components},
+        n_neighbors={n_neighbors},
+        metric={metric},
+        min_dist={min_dist},
+        """)
+        if reducer_type == 'umap':
+            reducer = umap.UMAP(
+                random_state=random_state,
+                n_components=n_components,
+                n_neighbors=n_neighbors,
+                metric=metric,
+                min_dist=min_dist,
+                )
+        embedding = reducer.fit_transform(data)
+        # save reduced coordinates
+        np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
+        if verbose > 2: print("saving", str(file_path) + '.npy')
+        if save_reducer:
+            # save the reducer object
+            joblib.dump(reducer, str(file_path) + '.pkl')
+    
+    return embedding, reducer
+
+
+def get_clusterer(data, save_dir, reducer_type='umap', n_neighbors=15, metric='euclidean', min_dist=0.0,
+                  clusterer_type='leiden', dim_clust=2, k_cluster=15, resolution_parameter=0.005,
+                  force_recompute=False, verbose=1):
+    """
+    Generate or load a clustering model and cluster labels.
+
+    Parameters
+    ----------
+    data : ndarray
+        Dataset on which we want to apply the DR method.
+    save_dir : str or pathlib Path object
+        Directory where the DR model and transformed data are stored.
+    reducer_type : str
+        DR method, can be 'umap', for now, other ones coming soon.
+    n_components : int
+        Number of final dimensions.
+    n-neighbors : int
+        Number of closest neighbors used in various DR methods.
+    metric : str
+        Type of distance used.
+    min_dist : float
+        Minimum distance between DRed data, we usually want 0.
+    clusterer_type : str
+        Clustering algorithm to partition data.
+    dim_clust : int
+        Dimensionality of the reducede space in which data is clustered.
+        A higher number allows for more complex cluster shapes, but introduces outliers.
+    k_cluster : int
+        Number of neighbors considered during the clustering.
+    resolution_parameter : float
+        Level of details of the clustering. A higher number increases the level of details.
+    force_recompute : bool
+        Whether computation occurs even if results already exist in `save_dir`.
+    
+    Returns
+    -------
+    embedding : ndarray
+        Reduced coordinates of the dataset.
+    reducer : object
+        The DR model, its type depends on the choosen DR method.
+    """
+
+    cluster_dir = save_dir / f"clusterer-{clusterer_type}_dim_clust-{dim_clust}_n_neighbors-{k_cluster}"   
+    if not os.path.exists(cluster_dir):
+        os.makedirs(cluster_dir)
+
+    if clusterer_type == "leiden":
+        clusterer_name = f"partition-{'RBConfigurationVertexPartition'}_resolution-{resolution_parameter}"
+    file_path = cluster_dir / clusterer_name
+
+    if os.path.exists(str(file_path) + '.npy') and not force_recompute:
+        if verbose > 1: print("Loading clusterer object and cluster labels")
+        if verbose > 2: print(str(file_path) + '.npy')
+        cluster_labels = np.load(str(file_path) + '.npy')
+        if clusterer_type == "leiden":
+            G = joblib.load(str(file_path) + '.ig')
+            partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
+            # extract labels from partition
+            cluster_labels = np.array(partition.membership)
+        nb_clust = cluster_labels.max()
+        if verbose > 1: print(f"There are {nb_clust} clusters")
+    else:
+        if verbose > 1: print("Performing clustering")
+        # get the embedding of data
+        if verbose > 2: print(f"""
+        dim_clust={dim_clust}, 
+        n_neighbors={n_neighbors}, 
+        metric={metric}, 
+        min_dist={min_dist},
+        k_cluster={k_cluster},
+        resolution_parameter={resolution_parameter},
+        """)
+        embedding, _ = get_reducer(data, save_dir, reducer_type, dim_clust, n_neighbors, metric, min_dist, verbose=verbose)
+        if clusterer_type == "leiden":
+            # build knn graph
+            embedding_pairs = ty.build_knn(embedding, k=k_cluster)
+            # convert into iGraph object
+            G = ty.to_iGraph(embedding, embedding_pairs)
+            # perform clustering
+            partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter)
+            # partition = la.find_partition(G, la.RBERVertexPartition, resolution_parameter=resolution_parameter)
+            cluster_labels = np.array(partition.membership)
+        nb_clust = cluster_labels.max()
+        if verbose > 1: print(f"Found {nb_clust} clusters")
+        # save cluster labels
+        np.save(str(file_path) + '.npy', cluster_labels, allow_pickle=False, fix_imports=False)
+        if verbose > 2: print("saving", str(file_path) + '.npy')
+    if clusterer_type == "leiden":
+        # save the iGraph object
+        joblib.dump(G, str(file_path) + '.ig')
+        return cluster_labels, cluster_dir, nb_clust, G
+
+
+def plot_clusters(embed_viz, cluster_labels=None, save_dir=None, cluster_params=None, extra_str=''):
+    """
+    Plots clustered data on its 2D projection.
+
+    Parameters
+    ----------
+    embed_viz : ndarray
+        Mx2 array of points coordinates in the 2D projection.
+    cluster_labels : array
+        Cluster label ids of data points.
+    save_dir : str or pathlib Path object
+        Directory where the vizualisation is stored.
+    cluster_params : dic
+        Parameters used to generate the 2D projection and clustering that are included in the file name.
+    extra_str : str
+        Additional string to add in the file name to indicate manual curation
+        of clustering for instance.
+    
+    Returns
+    -------
+    fig, ax : matplotlib figure objects.
+    """
+
+    if cluster_labels is not None:
+        nb_clust = cluster_labels.max()
+        # choose colormap
+        if nb_clust < 20:
+            clusters_cmap = sns.color_palette('Paired', 20)
+            cluster_colors = [clusters_cmap[x] if x >= 0
+                            else (0.5, 0.5, 0.5)
+                            for x in cluster_labels]
+        else:
+            clusters_cmap = cc.palette["glasbey"]
+            # make color mapper
+            # series to sort by decreasing order
+            uniq = pd.Series(cluster_labels).value_counts().index.astype(int)
+            n_colors = len(clusters_cmap)
+            labels_color_mapper = {x: clusters_cmap[i % n_colors] for i, x in enumerate(uniq)}
+            labels_color_mapper[-1] = (0.5, 0.5, 0.5)
+            cluster_colors = [labels_color_mapper[x] for x in cluster_labels]
+    else:
+        cluster_colors = 'royalblue'
+
+    fig, ax = plt.subplots(figsize=(10,10))
+    plt.scatter(embed_viz[:, 0], embed_viz[:, 1], c=cluster_colors, marker='.');
+    plt.axis('off')
+
+    if cluster_labels is not None:
+        for clust_id in np.unique(cluster_labels):
+            clust_targ = cluster_labels == clust_id
+            x_mean = embed_viz[clust_targ, 0].mean()
+            y_mean = embed_viz[clust_targ, 1].mean()
+            plt.text(x_mean, y_mean, str(clust_id))
+
+    if save_dir is not None:
+        if cluster_params is None:
+            str_params = ''
+        else:
+            str_params = '_' + '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
+        figname =  f'cluster_labels{str_params}{extra_str}.png'
+        plt.savefig(save_dir / figname, dpi=150)
+
+    return fig, ax
 
 
 # ------ Stepwise linear / logistic regression ------
