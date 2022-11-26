@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
 import os
+from pathlib import Path
 from time import time
 import joblib
 from itertools import combinations
@@ -1791,32 +1792,18 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
     >>> embedding, reducer = get_reducer(data=var_aggreg, save_dir=nas_dir)
     """
 
-    reducer_name = f"reducer-umap_dim-{n_components}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
-    file_path = save_dir / reducer_name
+    reducer_name = f"reducer-{reducer_type}_dim-{n_components}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
+    save_dir = Path(save_dir) / reducer_name
+    file_path = save_dir / "embedding"
     if os.path.exists(str(file_path) + '.npy'):
-        if verbose > 1: print("Loading reducer object and reduced coordinates")
-        if verbose > 2: print(str(file_path) + '.npy')
-        if verbose > 2: print(f"""
-        random_state={random_state},
-        n_components={n_components},
-        n_neighbors={n_neighbors},
-        metric={metric},
-        min_dist={min_dist},
-        """)
+        if verbose > 0: print("Loading reducer object and reduced coordinates")
         embedding = np.load(str(file_path) + '.npy')
-        if os.path.exists(str(file_path) + '.pkl'):
-            reducer = joblib.load(str(file_path) + '.pkl')
+        if os.path.exists(str(save_dir / "reducer") + '.pkl'):
+            reducer = joblib.load(str(save_dir / "reducer") + '.pkl')
         else:
             reducer = None
     else:
-        if verbose > 1: print("Computing dimensionality reduction")
-        if verbose > 2: print(f"""
-        random_state={random_state},
-        n_components={n_components},
-        n_neighbors={n_neighbors},
-        metric={metric},
-        min_dist={min_dist},
-        """)
+        if verbose > 0: print("Computing dimensionality reduction")
         if reducer_type == 'umap':
             reducer = umap.UMAP(
                 random_state=random_state,
@@ -1827,11 +1814,11 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
                 )
         embedding = reducer.fit_transform(data)
         # save reduced coordinates
+        save_dir.mkdir(parents=True, exist_ok=True)
         np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
-        if verbose > 2: print("saving", str(file_path) + '.npy')
         if save_reducer:
             # save the reducer object
-            joblib.dump(reducer, str(file_path) + '.pkl')
+            joblib.dump(reducer, str(save_dir / "reducer") + '.pkl')
     
     return embedding, reducer
 
@@ -1876,38 +1863,36 @@ def get_clusterer(data, save_dir, reducer_type='umap', n_neighbors=15, metric='e
         Reduced coordinates of the dataset.
     reducer : object
         The DR model, its type depends on the choosen DR method.
+
+    Example
+    -------
+    >>> np.random.seed(0)
+    >>> data = np.random.rand(800, 4)
+    >>> cluster_labels, cluster_dir, nb_clust, G = get_clusterer(data, "test")
     """
 
-    cluster_dir = save_dir / f"clusterer-{clusterer_type}_dim_clust-{dim_clust}_n_neighbors-{k_cluster}"   
-    if not os.path.exists(cluster_dir):
-        os.makedirs(cluster_dir)
+    reducer_name = f"reducer-{reducer_type}_dim-{dim_clust}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
+    reducer_dir = Path(save_dir) / reducer_name
+    cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
+    cluster_dir.mkdir(parents=True, exist_ok=True)
 
     if clusterer_type == "leiden":
         clusterer_name = f"partition-{'RBConfigurationVertexPartition'}_resolution-{resolution_parameter}"
     file_path = cluster_dir / clusterer_name
 
-    if os.path.exists(str(file_path) + '.npy') and not force_recompute:
-        if verbose > 1: print("Loading clusterer object and cluster labels")
-        if verbose > 2: print(str(file_path) + '.npy')
-        cluster_labels = np.load(str(file_path) + '.npy')
+    if os.path.exists(str(file_path) + '_labels.npy') and not force_recompute:
+        if verbose > 0: print("Loading clusterer object and cluster labels")
+        cluster_labels = np.load(str(file_path) + '_labels.npy')
         if clusterer_type == "leiden":
-            G = joblib.load(str(file_path) + '.ig')
-            partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
-            # extract labels from partition
-            cluster_labels = np.array(partition.membership)
+            G = joblib.load(str(file_path) + '_network.ig')
+        #     partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
+        #     # extract labels from partition
+        #     cluster_labels = np.array(partition.membership)
         nb_clust = cluster_labels.max()
-        if verbose > 1: print(f"There are {nb_clust} clusters")
+        if verbose > 0: print(f"There are {nb_clust} clusters")
     else:
-        if verbose > 1: print("Performing clustering")
+        if verbose > 0: print("Performing clustering")
         # get the embedding of data
-        if verbose > 2: print(f"""
-        dim_clust={dim_clust}, 
-        n_neighbors={n_neighbors}, 
-        metric={metric}, 
-        min_dist={min_dist},
-        k_cluster={k_cluster},
-        resolution_parameter={resolution_parameter},
-        """)
         embedding, _ = get_reducer(data, save_dir, reducer_type, dim_clust, n_neighbors, metric, min_dist, verbose=verbose)
         if clusterer_type == "leiden":
             # build knn graph
@@ -1915,17 +1900,16 @@ def get_clusterer(data, save_dir, reducer_type='umap', n_neighbors=15, metric='e
             # convert into iGraph object
             G = ty.to_iGraph(embedding, embedding_pairs)
             # perform clustering
-            partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter)
+            partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
             # partition = la.find_partition(G, la.RBERVertexPartition, resolution_parameter=resolution_parameter)
             cluster_labels = np.array(partition.membership)
         nb_clust = cluster_labels.max()
-        if verbose > 1: print(f"Found {nb_clust} clusters")
+        if verbose > 0: print(f"Found {nb_clust} clusters")
         # save cluster labels
-        np.save(str(file_path) + '.npy', cluster_labels, allow_pickle=False, fix_imports=False)
-        if verbose > 2: print("saving", str(file_path) + '.npy')
+        np.save(str(file_path) + '_labels.npy', cluster_labels, allow_pickle=False, fix_imports=False)
     if clusterer_type == "leiden":
         # save the iGraph object
-        joblib.dump(G, str(file_path) + '.ig')
+        joblib.dump(G, str(file_path) + '_network.ig')
         return cluster_labels, cluster_dir, nb_clust, G
 
 
