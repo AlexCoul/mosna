@@ -865,8 +865,13 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     nb_var = X.shape[1]
     if stat_funcs == 'default':
         stat_funcs = [np.mean, np.std]
-        if stat_names == 'default':
-            stat_names = ['mean', 'std']
+    elif not hasattr(stat_funcs, '__iter__'):
+        # check if a single function has been passed
+        stat_funcs = [stat_funcs]
+    if stat_names == 'default':
+        stat_names = ['mean', 'std']
+    elif isinstance(stat_names, str):
+        stat_names = [stat_names]
     nb_funcs = len(stat_funcs)
     aggreg = np.zeros((nb_obs, nb_var*nb_funcs))
 
@@ -1335,7 +1340,7 @@ def plot_niches_composition(counts=None, var=None, niches=None, var_label='varia
 
 ###### Survival and response statistics ######
 
-def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, verbose=1):
+def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, axis=0, verbose=1):
     """
     Delete or impute missing or non finite data.
     During imputation, they are replaced by continuous values, not by binary values.
@@ -1357,6 +1362,8 @@ def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, 
         are transformed to integers
     modify_infs : bool
         If True, inf values are also replaced by imputation, or discarded.
+    axis : int
+        Axis over which elements are dropped.
     verbose : int
         If 0 the function stays quiet.
     
@@ -1377,12 +1384,15 @@ def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, 
             data[to_nan] = np.nan
         # convert proportion threshold into absolute number of variables threshold
         if method in ['drop', 'mixed'] and (0 < thresh <= 1):
-            thresh = thresh * data.shape[1]
+            thresh = thresh * data.shape[axis]
         if method in ['drop', 'mixed']:
             # we use a custom code instead of pandas.dropna to return the boolean selector
-            count_nans = to_nan.sum(axis=1)
+            count_nans = to_nan.sum(axis=axis)
             select = count_nans <= thresh
-            data = data.loc[select, :]
+            if axis == 0:
+                data = data.loc[:, select].copy()
+            else:
+                data = data.loc[select, :].copy()
         # impute non finite values (nan, +/-inf)
         if method in ['knn', 'mixed']:
             if verbose > 0:
@@ -1687,6 +1697,8 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
                  use_col=None, skip_cols=[], z_score=1, cmap=None,
                  center=None, row_cluster=True, col_cluster=True,
                  palette=None, figsize=(10, 10), fontsize=10, 
+                 colors_ratio=0.03, dendrogram_ratio=0.2, cbar_kws=None,
+                 cbar_pos=(0.02, 0.8, 0.05, 0.18),
                  xlabels_rotation=30, ax=None, return_data=False):
 
     data = data.copy(deep=True)
@@ -1723,7 +1735,9 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
             center = None
     g = sns.clustermap(data, z_score=z_score, figsize=figsize, 
                        row_colors=colors, cmap=cmap, center=center,
-                       row_cluster=row_cluster, col_cluster=col_cluster)
+                       row_cluster=row_cluster, col_cluster=col_cluster,
+                       colors_ratio=colors_ratio, dendrogram_ratio=dendrogram_ratio,
+                       cbar_pos=cbar_pos, cbar_kws=cbar_kws)
     g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=fontsize);
     if hasattr(g, 'ax_row_colors'):
