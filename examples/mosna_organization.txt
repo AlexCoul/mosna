@@ -1,0 +1,21 @@
+└── data
+    ├── processed
+    │   ├── CODEX_CTCL
+    │   │   ├── network_reconstruction_trimdist-200_solitary-0
+    │   │   │   ├── all_edges.csv
+    │   │   │   ├── assortativity_on-cell-types
+    │   │   │   ├── assortativity_on-markers
+    │   │   │   ├── nas_on-cell-types_stats-prop-mad
+    │   │   │   └── nas_on-markers_stats-mean-std
+    │   │   │       ├── aggregation_statistics.csv
+    │   │   │       ├── dim-reduc-UMAP_nneigh-70
+    │   │   │       │   ├── clusterer-HDBSCAN_minsamples-10_minclust-500
+    │   │   │       │   │   ├── labels_minclust-500_epsilon-0.5.npy
+    │   │   │       │   │   └── labels_minclust-1000_epsilon-0.5.npy
+    │   │   │       │   └── clusterer-leiden_nneigh-70
+    │   │   │       └── dim-reduc-PCA
+    │   │   └── network_reconstruction_trimdist-auto
+    │   └── MIBI-TOF_TNBC
+    └── raw
+        ├── CODEX_CTCL
+        └── MIBI-TOF_TNBC

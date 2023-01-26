@@ -1,0 +1,50 @@
+├── data
+│   ├── blobs_r1-2.jbl
+│   ├── blobs_r1-2.pkl
+│   ├── intermediate
+│   │   ├── 20210825a
+│   │   └── example_image.tif
+│   ├── processed
+│   │   ├── hybrid_registration_matrices
+│   │   ├── ratios.npy
+│   │   └── times.npz
+│   ├── ratios.npy
+│   ├── raw
+│   │   ├── 20210825a
+│   │   ├── drosophila.h5
+│   │   ├── drosophila.xml
+│   │   ├── std_zarr_compressors
+│   │   └── test_HDF5_airyscan.hdf5
+│   ├── regitration_matrices
+│   │   ├── registration_sina_10gene_panel_r0001_xyz0000_1.txt
+│   │   ├── registration_sina_10gene_panel_r0001_xyz0001_1.txt
+│   ├── standard_compressors_benchmark_summary.png
+│   ├── standard_compressors_compression_ratios.png
+│   ├── standard_compressors_compression_speed.png
+│   └── times.npz
+├── notebooks
+│   ├── deconv_single_image_Franky.py
+│   ├── examples_h5writing.ipynb
+├── README.md
+├── requirements.txt
+├── resources
+│   ├── B3D main figure.png
+│   ├── B3D table.png
+│   ├── filters
+│   │   ├── jpegls-hdf-filter-v0.2
+│   │   ├── jpegls-hdf-filter-v0.2.zip
+│   │   └── lpcrice-hdf-filter-v0.2
+│   └── HDF5_install
+│       ├── CMake-hdf5-1.13.0
+│       ├── CMake-hdf5-1.13.0-built
+│       ├── CMake-hdf5-1.13.0.tar.gz
+│       ├── hdf5plugin-1.13.0-ubuntu2010_64
+│       └── test_after_install
+└── src
+    ├── data_io_sina.py
+    ├── generate_images.py
+    ├── __init__.py
+    ├── load_sina_data.py
+    ├── __pycache__
+    │   └── utils.cpython-38.pyc
+    └── utils.py
