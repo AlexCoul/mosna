@@ -20,12 +20,17 @@ from statsmodels.stats.multitest import fdrcorrection
 import statsmodels.api as sm
 import warnings
 from sklearn.impute import KNNImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn import linear_model
+from sklearn.model_selection import train_test_split
+import sklearn.metrics as metrics
 import umap
 import hdbscan
 import composition_stats as cs
 import igraph as ig
 import leidenalg as la
 import colorcet as cc
+import re
 
 from multiprocessing import cpu_count
 from dask.distributed import Client, LocalCluster, progress
@@ -1251,7 +1256,7 @@ def plot_screened_parameters(obj, cell_pos_cols, cell_type_col, orders, dim_clus
 
 
 
-def make_cluster_cmap(labels, grey_pos='start'):
+def make_cluster_cmap(labels, grey_pos='end', saturated_first=True, as_mpl_cmap=False):
     """
     Creates an appropriate colormap for a vector of cluster labels.
     
@@ -1270,30 +1275,32 @@ def make_cluster_cmap(labels, grey_pos='start'):
     Examples
     --------
     >>> my_cmap = make_cluster_cmap(labels=np.array([-1,3,5,2,4,1,3,-1,4,2,5]))
-    """
-    
-    from matplotlib.colors import ListedColormap
-    
-    if labels.max() < 9:
-        cmap = list(plt.get_cmap('tab10').colors)
-        if grey_pos == 'end':
-            cmap.append(cmap.pop(-3))
-        elif grey_pos == 'start':
-            cmap = [cmap.pop(-3)] + cmap
-        elif grey_pos == 'del':
-            del cmap[-3]
-    else:
-        cmap = list(plt.get_cmap('tab20').colors)
-        if grey_pos == 'end':
-            cmap.append(cmap.pop(-6))
-            cmap.append(cmap.pop(-6))
-        elif grey_pos == 'start':
-            cmap = [cmap.pop(-5)] + cmap
-            cmap = [cmap.pop(-5)] + cmap
-        elif grey_pos == 'del':
-            del cmap[-5]
-            del cmap[-5]
-    cmap = ListedColormap(cmap)
+    """    
+
+    cmap = ['#1F77B4', '#FF7F0E',  '#2CA02C', '#D62728', '#9467BD',
+            '#8C564B', '#17BECF', '#E377C2', '#BCBD22', '#7F7F7F']
+    if grey_pos == 'start':
+        cmap[0], cmap[-1] = cmap[-1], cmap[0]
+    if len(labels) > 10:
+        cmap_next = ['#AEC7E8', '#FFBB78', '#98DF8A', '#FF9896', '#C5B0D5',
+                      '#C49C94', '#9EDAE5', '#F7B6D2', '#DBDB8D', '#C7C7C7']
+        if grey_pos == 'start':
+            cmap_next[0], cmap_next[-1] = cmap_next[-1], cmap_next[0]
+        # select as few as lowly saturated colors as possible
+        if len(labels) < 20:
+            cmap_next = cmap_next[:len(labels)-10]
+        if saturated_first:
+            cmap = cmap + cmap_next
+        else:
+            # put the saturated colors at the end
+            cmap = cmap_next + cmap
+    if len(labels) > 20:
+        cmap_end = ['#00FFFF', '#00FF00', '#FF00FF', '#FF007F']
+        cmap = cmap + cmap_end
+    if as_mpl_cmap:
+        # TODO: check if hex convert to tuple of size 3
+        from matplotlib.colors import ListedColormap
+        cmap = ListedColormap(cmap)
     
     return cmap
 
@@ -1485,7 +1492,7 @@ def convert_quanti_to_categ(data, method='median'):
     return categ
 
 
-def extract_X_y(data, y_name, y_values=None, col_names=None, binarize=True):
+def extract_X_y(data, y_name, y_values=None, col_names=None, col_exclude=None, binarize=True):
     """
     Extract data corresponding to specific values of a target variable.
     Useful to fit or train a statistical (learning) model. 
@@ -1500,9 +1507,11 @@ def extract_X_y(data, y_name, y_values=None, col_names=None, binarize=True):
         List of accepted conditions to extract observations
     col_names : list or None
         List of variable to extract.
+    col_exclude : list(str) or None
+        Columns to ignore.
     binarize : bool
         If true and `y_values` has 2 elements, the vector `y` is
-        binarized, with the 1st and 2nd elements of `y_vallues`
+        binarized, with the 1st and 2nd elements of `y_values`
         tranformed into 0 and 1 respectivelly.
     
     Returns
@@ -1513,15 +1522,18 @@ def extract_X_y(data, y_name, y_values=None, col_names=None, binarize=True):
         The y values related to X.
     """
 
-    if col_names is None:
-        col_names = data.columns
     # if the y variable is in a pandas multiindex:
-    if y_name not in col_names and y_name in data.index.names:
+    if y_name not in data.columns and y_name in data.index.names:
         X = data.reset_index()
     else:
         X = deepcopy(data)
     if y_values is None:
         y_values = X[y_name].unique()
+    if col_exclude is None:
+        col_exclude = []
+    col_exclude.append(y_name)
+    if col_names is None:
+        col_names = [x for x in data.columns if x not in col_exclude]
 
     # select desired groups
     select = np.any([X[y_name] == i for i in y_values], axis=0)
@@ -1532,7 +1544,7 @@ def extract_X_y(data, y_name, y_values=None, col_names=None, binarize=True):
     return X, y
 
 
-def make_composed_variables(data, use_col=None, method='ratio', order=2):
+def make_composed_variables(data, use_col=None, method='ratio', order=2, clean_ratios=True):
     """
     Create derived or composed variables from simpler ones.
 
@@ -1560,9 +1572,19 @@ def make_composed_variables(data, use_col=None, method='ratio', order=2):
     if method == 'ratio':
         combis = list(combinations(use_col, 2))
         new_vars = {}
-        for var_1, var_2 in combis:
-            new_var_name = f"({var_1} / {var_2})"
-            new_vars[new_var_name] = data[var_1] / data[var_2]
+        if order > 1 and clean_ratios:
+            for var_1, var_2 in combis:
+                new_var_name = f"[{var_1} / {var_2}]"
+                # filter cancelling ratios
+                # list_vars = re.findall(r'\b\w+\b(?:\s*\([^()]*\))?', new_var_name)
+                # if len(list_vars[::2]) == len(set(list_vars[::2])) \
+                #     and len(list_vars[::2]) == len(set(list_vars[::2])):
+                # the regex doesn't do what I want
+                new_vars[new_var_name] = data[var_1] / data[var_2]
+        else:
+            for var_1, var_2 in combis:
+                new_var_name = f"[{var_1} / {var_2}]"
+                new_vars[new_var_name] = data[var_1] / data[var_2]
         new_data = pd.DataFrame(data=new_vars)
     
     # make higher order composed variables recursively
@@ -1574,7 +1596,7 @@ def make_composed_variables(data, use_col=None, method='ratio', order=2):
 
 
 def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude_vars=None, composed_vars=False, 
-                    composed_order=2, test='Kolmogorov-Smirnov', fdr_method='indep', alpha=0.05):
+                    composed_order=2, test='Mann-Whitney', fdr_method='indep', alpha=0.05):
     
 
     if composed_vars:
@@ -1596,8 +1618,12 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude
     select_tgt = group_var == group_tgt
     if group_ref == 'other':
         select_ref = group_var != group_tgt
-    else:
+    elif not isinstance(group_ref, list):
         select_ref = group_var == group_ref
+    else:
+        select_ref = group_var == group_ref[0]
+        for ref_id in group_ref[1:]:
+            select_ref = np.logical_or(select_ref, group_var == ref_id)
     if isinstance(select_tgt, pd.Series):
         select_tgt = select_tgt.values
         select_ref = select_ref.values
@@ -1606,17 +1632,24 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude
     # filter variable_names if exclude_vars was given
     if exclude_vars is not None:
         markers = [x for x in markers if x not in exclude_vars]
+    used_markers = []
     for marker in markers:
-        dist_tgt = data.loc[select_tgt, marker]
-        dist_ref = data.loc[select_ref, marker]
-        if test == 'Mann-Whitney':
-            mwu_stat, pval = mannwhitneyu(dist_tgt, dist_ref)
-        if test == 'Welch':
-            w_stat, pval = ttest_ind(dist_tgt, dist_ref, equal_var=False)
-        if test == 'Kolmogorov-Smirnov': 
-            ks_stat, pval = ks_2samp(dist_tgt, dist_ref)
-        pvals.append(pval)
-    pvals = pd.DataFrame(data=pvals, index=markers, columns=['pval'])
+        dist_tgt = data.loc[select_tgt, marker].dropna()
+        dist_ref = data.loc[select_ref, marker].dropna()
+        # select = np.logical_and(np.isfinite(dist_tgt), np.isfinite(dist_ref))
+        # dist_tgt = dist_tgt[select]
+        # dist_ref = dist_ref[select]
+        if len(dist_tgt) > 0 and len(dist_ref) > 0:
+            if test == 'Mann-Whitney':
+                mwu_stat, pval = mannwhitneyu(dist_tgt, dist_ref)
+            if test == 'Welch':
+                w_stat, pval = ttest_ind(dist_tgt, dist_ref, equal_var=False)
+            if test == 'Kolmogorov-Smirnov': 
+                ks_stat, pval = ks_2samp(dist_tgt, dist_ref)
+            pvals.append(pval)
+            used_markers.append(marker)
+    pvals = pd.DataFrame(data=pvals, index=used_markers, columns=['pval'])
+    pvals = pvals.sort_values(by='pval', ascending=True)
 
     if fdr_method is not None:
         rejected, pval_corr = fdrcorrection(pvals['pval'], method=fdr_method)
@@ -1659,7 +1692,8 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
     # TODO: utility function to put id variables in multi-index into columns if not already in cols
     wide = data.loc[:, gp_in_cols + marker_vars]
     if id_vars is None:
-        id_vars = list(wide.index.names) + gp_in_cols
+        list_id_vars = list(wide.index.names) + gp_in_cols
+        id_vars = [x for x in list_id_vars if x is not None]
     if multi_ind_to_col:
         wide = wide.reset_index()
 
@@ -1694,8 +1728,8 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
 
 
 def plot_heatmap(data, obs_labels=None, group_var=None, groups=None, 
-                 use_col=None, skip_cols=[], z_score=1, cmap=None,
-                 center=None, row_cluster=True, col_cluster=True,
+                 use_col=None, skip_cols=[], z_score=1, drop_unique=True, 
+                 cmap=None, center=None, row_cluster=True, col_cluster=True,
                  palette=None, figsize=(10, 10), fontsize=10, 
                  colors_ratio=0.03, dendrogram_ratio=0.2, cbar_kws=None,
                  cbar_pos=(0.02, 0.8, 0.05, 0.18),
@@ -1710,6 +1744,20 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
         use_col = [x for x in data.columns if x not in skip_cols]
     else:
         data = data[use_col]
+    if drop_unique:
+        drop_cols = []
+        keep_cols = []
+        for col in use_col:
+            n_uniq = len(data[col].unique())
+            if n_uniq > 0:
+                keep_cols.append(col)
+            else:
+                drop_cols.append(col)
+        if len(drop_cols) > 0:
+            print("Dropping colunms with unique value:")
+            print(drop_cols)
+            data = data.loc[:, keep_cols]
+            use_col = keep_cols
 
     if group_var is not None:
         if groups is None:
@@ -1731,7 +1779,7 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
             cmap = sns.diverging_palette(230, 20, as_cmap=True)
             center = 0
         else:
-            cmap = sns.color_palette("Blues", as_cmap=True)
+            cmap = sns.light_palette("#C25539", as_cmap=True)
             center = None
     g = sns.clustermap(data, z_score=z_score, figsize=figsize, 
                        row_colors=colors, cmap=cmap, center=center,
@@ -1927,7 +1975,17 @@ def get_clusterer(data, save_dir, reducer_type='umap', n_neighbors=15, metric='e
         return cluster_labels, cluster_dir, nb_clust, G
 
 
-def plot_clusters(embed_viz, cluster_labels=None, save_dir=None, cluster_params=None, extra_str=''):
+def plot_clusters(embed_viz, 
+                  cluster_labels=None, 
+                  save_dir=None, 
+                  cluster_params=None, 
+                  extra_str='', 
+                  show_id=True,
+                  cluster_colors=None,
+                  aspect='equal',
+                  return_cmap=False, 
+                  figsize=(10,10),
+                  ):
     """
     Plots clustered data on its 2D projection.
 
@@ -1950,31 +2008,30 @@ def plot_clusters(embed_viz, cluster_labels=None, save_dir=None, cluster_params=
     fig, ax : matplotlib figure objects.
     """
 
-    if cluster_labels is not None:
-        nb_clust = cluster_labels.max()
-        # choose colormap
-        if nb_clust < 20:
-            clusters_cmap = sns.color_palette('Paired', 20)
-            cluster_colors = [clusters_cmap[x] if x >= 0
-                            else (0.5, 0.5, 0.5)
-                            for x in cluster_labels]
-        else:
-            clusters_cmap = cc.palette["glasbey"]
+    if cluster_colors is None:
+        if cluster_labels is not None:
+            nb_clust = cluster_labels.max()
+            uniq = pd.Series(cluster_labels).value_counts().index
+
+            # choose colormap
+            clusters_cmap = make_cluster_cmap(uniq)
             # make color mapper
             # series to sort by decreasing order
-            uniq = pd.Series(cluster_labels).value_counts().index.astype(int)
             n_colors = len(clusters_cmap)
             labels_color_mapper = {x: clusters_cmap[i % n_colors] for i, x in enumerate(uniq)}
-            labels_color_mapper[-1] = (0.5, 0.5, 0.5)
+            # labels_color_mapper = {x: clusters_cmap[i] for i, x in enumerate(uniq)}
+            # labels_color_mapper[-1] = (0.5, 0.5, 0.5)
             cluster_colors = [labels_color_mapper[x] for x in cluster_labels]
-    else:
-        cluster_colors = 'royalblue'
+        else:
+            cluster_colors = 'royalblue'
 
-    fig, ax = plt.subplots(figsize=(10,10))
+    fig, ax = plt.subplots(figsize=figsize)
     plt.scatter(embed_viz[:, 0], embed_viz[:, 1], c=cluster_colors, marker='.');
     plt.axis('off')
+    if aspect == 'equal':
+        ax.set_aspect('equal')
 
-    if cluster_labels is not None:
+    if cluster_labels is not None and show_id:
         for clust_id in np.unique(cluster_labels):
             clust_targ = cluster_labels == clust_id
             x_mean = embed_viz[clust_targ, 0].mean()
@@ -1989,6 +2046,8 @@ def plot_clusters(embed_viz, cluster_labels=None, save_dir=None, cluster_params=
         figname =  f'cluster_labels{str_params}{extra_str}.png'
         plt.savefig(save_dir / figname, dpi=150)
 
+    if return_cmap:
+        return fig, ax, labels_color_mapper
     return fig, ax
 
 
