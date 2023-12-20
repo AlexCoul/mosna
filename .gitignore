@@ -7,3 +7,4 @@ batch*
 *.pdf
 *__pychache__*
 *.pyc
+*.png

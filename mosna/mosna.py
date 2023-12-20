@@ -2203,6 +2203,193 @@ def stepwise_regression(X, y=None,
             return model, included
 
 
+def logistic_regression(data, 
+                        y=None,
+                        y_name=None,
+                        y_values=None,
+                        col_drop=None, 
+                        cv_train=5, 
+                        cv_adapt=True, 
+                        cv_max=10, 
+                        l1_ratios_list='auto', 
+                        dir_save=None,
+                        plot_coefs=True,
+                        save_coefs=False,
+                        save_scores=False,
+                        save_plot_figures=False,
+                        verbose=1,
+                        ):
+    """
+    Train logistic regression models looking for the best hyperparameters
+    for the ElasticNet penalization, and dislay or save results and models.
+
+    Parameters
+    ----------
+    data : DataFrame
+        Table containing predictive variables.
+    y : array_like, optional
+        Response / target variable.
+    y_name : str, optional
+        If `y`is not provided, it is used to extract the response from `data`.
+    y_values : list, optional
+        List of accepted conditions to extract observations
+    col_drop : iterable, optional
+        Columns to ignore in `data`
+
+    Returns
+    -------
+    models : dict
+        Record of scikit-learn's models and their associated performance and
+        coefficients for each l1 ratios list.
+    
+    Example
+    -------
+    >>> col_drop = ['Patients', 'Spots']
+    >>> y_name = 'Groups'
+    """
+
+    # Elasticnet logistic regression
+    # l1_ratio = 0 the penalty is an L2 penalty (Ridge)
+    # l1_ratio = 1 the penalty is an L1 penalty (Lasso)
+
+    # Test either one of those combinations
+    if l1_ratios_list == 'auto':
+        l1_ratios_list = [
+            ['default', [0.5]],
+            ['naive', np.linspace(0, 1, 21)],           # naive param grid
+            ['advised', [.1, .5, .7, .9, .95, .99, 1]], # advised in scikit-learn documentation
+        ]
+
+    score_labels = [
+        'ROC AUC', # Receiver Operating Characteristic Area Under the Curve
+        'AP',      # Average Precision
+        'MCC',     # Matthews Correlation Coefficient
+    ]
+
+    # /!\ not related to `X = obj[aggreg_vars].values`
+    if y is None:
+        X, y = extract_X_y(data, y_name, y_values)
+
+    X = data.reset_index()
+    for col in col_drop:
+        if col in X.columns:
+            X.drop(columns=col, inplace=True)
+    X = X.loc[(X.loc[:, y_name] == 1) | (X.loc[:, y_name] == 2), :]
+    y = X[y_name].values - 1  # to have resp=0, non-resp=1
+    X = X.drop(columns=[y_name])
+    var_idx = X.columns
+    # X = X.values
+
+    start = time()
+
+    models = {}
+    for l1_name, l1_ratios in l1_ratios_list:
+
+        score_split = {}
+        # stratify train / test by response
+        np.random.seed(0)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, 
+            test_size=0.25, 
+            random_state=0, 
+            shuffle=True, 
+        )
+        # Standardize data to give same weight to regularization
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        training_succeeded = False
+        cv_used = cv_train
+        while not training_succeeded and cv_used <= cv_max:
+            np.random.seed(0)
+            clf = linear_model.LogisticRegressionCV(
+                cv=cv_used,
+                Cs=20, 
+                penalty='elasticnet', 
+                # scoring='neg_log_loss', 
+                scoring='roc_auc', 
+                solver='saga', 
+                l1_ratios=l1_ratios,
+                max_iter=10000,
+                n_jobs=-1,  # or n_jobs-1 to leave one core available
+            )
+            clf = clf.fit(X_train, y_train)
+            training_succeeded = not np.all(clf.coef_ == 0)
+            if not training_succeeded:
+                if cv_adapt:
+                    cv_used += 1
+                    print(f"        training failed, trying with cv = {cv_used}")
+                else:
+                    print(f"        training failed")
+                    break
+            
+        if training_succeeded:
+            y_pred_proba = clf.predict_proba(X_test)[:, 1]
+            y_pred = clf.predict(X_test)
+            score = {
+                'ROC AUC': metrics.roc_auc_score(y_test, y_pred_proba),
+                'AP' : metrics.average_precision_score(y_test, y_pred_proba),
+                'MCC': metrics.matthews_corrcoef(y_test, y_pred),
+            }
+
+            # Save model coefficients and plots
+            l1_ratio = np.round(clf.l1_ratio_[0], decimals=4)
+            C = np.round(clf.C_[0], decimals=4)
+
+            coef = pd.DataFrame({'coef': clf.coef_.flatten()}, index=var_idx)
+            coef['abs coef'] = coef['coef'].abs()
+            coef = coef.sort_values(by='abs coef', ascending=False)
+            coef['% total'] = coef['abs coef'] / coef['abs coef'].sum()
+            coef['cum % total'] = coef['% total'].cumsum()
+            coef['coef OR'] = np.exp(coef['coef'])
+            nb_coef = coef.shape[0]
+            if save_coefs:
+                coef.to_csv(dir_save / f"LogisticRegressionCV_coefficients.csv")
+            
+            if plot_coefs:
+                nb_coef_plot = min(20, nb_coef)
+                labels = coef.index[:nb_coef_plot]
+
+                plt.figure()
+                ax = coef.loc[labels, 'coef'].to_frame().plot.bar()
+                ax.hlines(y=0, xmin=0, xmax=nb_coef_plot-1, colors='gray', linestyles='dashed')
+                ticks_pos = np.linspace(start=0, stop=nb_coef_plot-1, num=nb_coef_plot)
+                # ticks_label = np.round(ticks_label, decimals=2)
+                ax.set_xticks(ticks_pos);
+                # ax.set_xticklabels(ticks_label)
+                ax.set_xticklabels(labels, rotation=45, ha='right');
+                plt.xlabel('variables')
+                plt.ylabel('coef')
+                plt.title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']}")
+                if save_plot_figures:
+                    plt.savefig(dir_save / f"coef.png", bbox_inches='tight', facecolor='white')
+
+        else:
+            score = {
+                'ROC AUC': np.nan,
+                'AP' : np.nan,
+                'MCC': np.nan,
+            }
+            coef = None
+            print(f"        training failed with cv <= {cv_max}")
+                
+        models[l1_name] = {
+            'model': clf,
+            'score': score,
+            'coef': coef,
+        }
+
+        scores = pd.DataFrame.from_dict(score, orient='index')
+        if save_scores:
+            scores.to_csv(dir_save / 'scores_niches.csv')
+
+    end = time()
+    duration = end - start
+    if verbose > 0:
+        print("Training took {duration}s")
+
+    return models
 
 # ------ Risk ratios ------
 
