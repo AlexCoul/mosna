@@ -1660,7 +1660,8 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude
 
 def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, 
                         max_cols=-1, exclude_vars=None, id_vars=None, var_name='variable', value_name='value', 
-                        multi_ind_to_col=False, figsize=(20, 6), fontsize=20, orientation=30, ax=None):
+                        multi_ind_to_col=False, figsize=(20, 6), fontsize=20, orientation=30, ax=None,
+                        plot_type='boxplot', add_points=True):
     """
     Plot the distribution of variables by groups.
     """
@@ -1670,16 +1671,21 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
         groups = data[group_var].unique()
     if len(groups) == 2 and pval_data is not None:
         if isinstance(pval_data, str) and pval_data == 'compute':
-            pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, order=0)
+            pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, composed_order=0)
         nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
+        print(f'There are {nb_vars} significant variables in `{pval_col}`')
+        if nb_vars == 0:
+            nb_vars = len(pval_data)
         if max_cols > 0:
             nb_vars = min(nb_vars, max_cols)
         marker_vars = pval_data.sort_values(by=pval_col, ascending=True).head(nb_vars).index.tolist()
     else:
         marker_vars = data.columns.tolist()
+        if max_cols > 0:
+            marker_vars = marker_vars[:max_cols]
     # filter variable_names if exclude_vars was given
     if group_var in data.columns:
-        gp_in_cols = [group_var]
+        gp_in_cols = [group_var] # exclude column of groups anyway
         if exclude_vars is None:
             exclude_vars = [group_var]
         else:
@@ -1719,8 +1725,17 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
         split = True
     else:
         split = False
-    sns.violinplot(x=var_name, y=value_name, hue=group_var,
-                   data=long, palette="Set2", split=split, ax=ax);
+    
+    # TODO: display variables on different axes if the have very differents ranges
+    if plot_type == 'boxplot':
+        sns.boxplot(x=var_name, y=value_name, hue=group_var, 
+                    data=long, palette="Set2", ax=ax);
+    elif plot_type == 'violinplot':
+        sns.violinplot(x=var_name, y=value_name, hue=group_var, 
+                       data=long, palette="Set2", split=split, ax=ax);
+    if add_points:
+        sns.stripplot(long, x=var_name, y=value_name, hue=group_var, 
+                      dodge=True, size=4, palette='dark:.3', legend=None);
     plt.xticks(rotation=orientation, ha='right', fontsize=fontsize);
     plt.yticks(fontsize=fontsize);
     if ax_none:
@@ -2217,6 +2232,7 @@ def logistic_regression(data,
                         save_coefs=False,
                         save_scores=False,
                         save_plot_figures=False,
+                        figsize=(8, 8),
                         verbose=1,
                         ):
     """
@@ -2351,19 +2367,19 @@ def logistic_regression(data,
                 nb_coef_plot = min(20, nb_coef)
                 labels = coef.index[:nb_coef_plot]
 
-                plt.figure()
-                ax = coef.loc[labels, 'coef'].to_frame().plot.bar()
+                fig, ax = plt.subplots(figsize=figsize)
+                ax = coef.loc[labels, 'coef'].to_frame().plot.bar(ax=ax)
                 ax.hlines(y=0, xmin=0, xmax=nb_coef_plot-1, colors='gray', linestyles='dashed')
                 ticks_pos = np.linspace(start=0, stop=nb_coef_plot-1, num=nb_coef_plot)
                 # ticks_label = np.round(ticks_label, decimals=2)
                 ax.set_xticks(ticks_pos);
                 # ax.set_xticklabels(ticks_label)
                 ax.set_xticklabels(labels, rotation=45, ha='right');
-                plt.xlabel('variables')
-                plt.ylabel('coef')
-                plt.title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']}")
+                ax.set_xlabel('variables')
+                ax.set_ylabel('coef')
+                ax.set_title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']}")
                 if save_plot_figures:
-                    plt.savefig(dir_save / f"coef.png", bbox_inches='tight', facecolor='white')
+                    fig.savefig(dir_save / f"coef.png", bbox_inches='tight', facecolor='white')
 
         else:
             score = {
@@ -2387,7 +2403,7 @@ def logistic_regression(data,
     end = time()
     duration = end - start
     if verbose > 0:
-        print("Training took {duration}s")
+        print(f"Training took {duration:.3f}s")
 
     return models
 
