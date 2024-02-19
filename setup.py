@@ -25,7 +25,11 @@ setup(
     include_package_data=True,
     install_requires=['matplotlib>=2.2.3', 'numpy', 'seaborn',
                       'pandas>=1.4.3','scipy', 'statsmodels', 
-                      'scikit-image', 'scikit-learn',
+                      'scikit-image', 'scikit-learn', 'ipykernel',
+                      'pyarrow', 'tqdm', 'napari', 'colorcet',
+                      'composition_stats', 'tysserand', 'ipywidgets',
+                      'igraph', 'leidenalg', 'openpyxl', 'odfpy',
+                      'fastcluster',
                      ],
     keywords = 'spatial networks cells transcriptomics sociology econometrics'
 )
