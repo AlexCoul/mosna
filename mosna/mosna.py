@@ -1544,53 +1544,54 @@ def extract_X_y(data, y_name, y_values=None, col_names=None, col_exclude=None, b
     return X, y
 
 
-def make_composed_variables(data, use_col=None, method='ratio', order=2, clean_ratios=True):
+def make_composed_variables(data, use_col=None, method='ratio', order=2):
     """
-    Create derived or composed variables from simpler ones.
+    Create derived or composed variables from simpler ones.  
+    When producing ratios of variables, ratios of identical variables and
+    reverse ratios are avoided, e.g. a/b, but no a/a nor b/a.
+    When producing ratios of ratios of variables (order=2), equivalent and
+    inverse ratios are avoided, e.g. (a/b)/(c/d), but no (a/b)/(a/d), and
+    no (a/c)/(b/d).
 
     Example
     -------
     >>> df = pd.DataFrame({
-            'a': [1, 2, 3],
-            'b': [2, 4, 6],
-            'c': [6, 12, 18],
+            'a': [24, 24, 24],
+            'b': [12, 8, 8],
+            'c': [6, 4, 3],
+            'd': [3, 4, 1],
         })
     >>> mosna.make_composed_variables(df)
-     (a / b)   (a / c)   (b / c)  ((a / b) / (a / c))  ((a / b) / (b / c))  \
-    0      0.5  0.166667  0.333333                  3.0                  1.5   
-    1      0.5  0.166667  0.333333                  3.0                  1.5   
-    2      0.5  0.166667  0.333333                  3.0                  1.5   
-
-    ((a / c) / (b / c))  
-    0                  0.5  
-    1                  0.5  
-    2                  0.5 
+       a / b  a / c  a / d     b / c  b / d  c / d  (a / b) / (c / d)
+    0    2.0    4.0    8.0  2.000000    4.0    2.0                1.0
+    1    3.0    6.0    6.0  2.000000    2.0    1.0                3.0
+    2    3.0    8.0   24.0  2.666667    8.0    3.0                1.0                   
     """
     
     if use_col is None:
         use_col = data.columns
     if method == 'ratio':
-        combis = list(combinations(use_col, 2))
+        # ratio of variables
         new_vars = {}
-        if order > 1 and clean_ratios:
-            for var_1, var_2 in combis:
-                new_var_name = f"[{var_1} / {var_2}]"
-                # filter cancelling ratios
-                # list_vars = re.findall(r'\b\w+\b(?:\s*\([^()]*\))?', new_var_name)
-                # if len(list_vars[::2]) == len(set(list_vars[::2])) \
-                #     and len(list_vars[::2]) == len(set(list_vars[::2])):
-                # the regex doesn't do what I want
-                new_vars[new_var_name] = data[var_1] / data[var_2]
-        else:
-            for var_1, var_2 in combis:
-                new_var_name = f"[{var_1} / {var_2}]"
+        for i, var_1 in enumerate(use_col):
+            for var_2 in use_col[i+1:]:
+                new_var_name = f"{var_1} / {var_2}"
                 new_vars[new_var_name] = data[var_1] / data[var_2]
         new_data = pd.DataFrame(data=new_vars)
     
-    # make higher order composed variables recursively
-    if order > 1:
-        next_data = make_composed_variables(new_data, method=method, order=order-1)
-        new_data = pd.concat([new_data, next_data], axis=1)
+        if order == 2:
+            # ratios of ratios of variables
+            new_vars = {}
+            for i, var_1 in enumerate(use_col):
+                for j, var_2 in enumerate(use_col[i+1:]):
+                    for k, var_3 in enumerate(use_col[i+j+2:]):
+                        for var_4 in use_col[i+j+k+3:]:
+                            pair_1 = [var_1, var_2]
+                            pair_2 = [var_3, var_4]
+                            new_var_name = f"({var_1} / {var_2}) / ({var_3} / {var_4})"
+                            new_vars[new_var_name] = (data[var_1] / data[var_2]) / (data[var_3] / data[var_4])
+            next_data = pd.DataFrame(data=new_vars)
+            new_data = pd.concat([new_data, next_data], axis=1)
 
     return new_data
 
