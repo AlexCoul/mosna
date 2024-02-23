@@ -29,7 +29,8 @@ setup(
                       'pyarrow', 'tqdm', 'napari', 'colorcet',
                       'composition_stats', 'tysserand', 'ipywidgets',
                       'igraph', 'leidenalg', 'openpyxl', 'odfpy',
-                      'fastcluster',
+                      'fastcluster', 'lifelines', 'hdbscan', 'umap-learn',
+                      'dask',
                      ],
     keywords = 'spatial networks cells transcriptomics sociology econometrics'
 )
