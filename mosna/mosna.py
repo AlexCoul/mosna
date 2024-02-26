@@ -8,6 +8,7 @@ from pathlib import Path
 from time import time
 import joblib
 from itertools import combinations
+from functools import partial
 from copy import deepcopy
 from sklearn.utils import shuffle
 from sklearn.preprocessing import StandardScaler
@@ -432,6 +433,7 @@ def zscore(mat, mat_rand, axis=0, return_stats=False):
     else:
         return zscore
     
+# DEPRECATED: batch computations will be performed by loading each individual network files
 def select_pairs_from_coords(coords_ids, pairs, how='inner', return_selector=False):
     """
     Select edges related to specific nodes.
@@ -548,6 +550,7 @@ def sample_assort_mixmat(nodes, edges, attributes, sample_id=None ,n_shuffle=50,
     sample_stats = pd.DataFrame(data=sample_data, index=col_sample).T
     return sample_stats
 
+# DEPRECATED: batch computations will be performed by loading each individual network files
 def _select_nodes_edges_from_group(nodes, edges, group, groups):
     """
     Select nodes and edges related to a given group of nodes.
@@ -652,6 +655,182 @@ def batch_assort_mixmat(nodes, edges, attributes, groups, n_shuffle=50,
                 group_data.to_csv(os.path.join(dir_save_interm, f'network_statistics_group_{group}.csv'), 
                                   encoding='utf-8', 
                                   index=False)
+            groups_data.append(group_data)
+        networks_stats = pd.concat(groups_data, axis=0)
+    else:
+        from multiprocessing import cpu_count
+        from dask.distributed import Client, LocalCluster
+        from dask import delayed
+        
+        # select the right number of cores
+        nb_cores = cpu_count()
+        if isinstance(parallel_groups, int):
+            use_cores = min(parallel_groups, nb_cores)
+        elif parallel_groups == 'max-1':
+            use_cores = nb_cores - 1
+        elif parallel_groups == 'max':
+            use_cores = nb_cores
+        # set up cluster and workers
+        cluster = LocalCluster(n_workers=use_cores, 
+                               threads_per_worker=1,
+                               memory_limit=memory_limit)
+        client = Client(cluster)
+        
+        for group in groups.unique():
+            # select nodes and edges of a specific group
+            nodes_edges_sel = delayed(_select_nodes_edges_from_group)(nodes, edges, group, groups)
+            # individual samples z-score stats are not parallelized over shuffling rounds
+            # because parallelization is already done over samples
+            group_data = delayed(sample_assort_mixmat)(nodes_edges_sel[0], nodes_edges_sel[1], attributes, sample_id=group, 
+                                                       n_shuffle=n_shuffle, parallel=parallel_shuffle) 
+            groups_data.append(group_data)
+        # evaluate the parallel computation
+        networks_stats = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
+    return networks_stats
+
+
+def make_group_network_stats(
+    net_dir,
+    data_info,
+    extension,
+    read_fct,
+    attributes,
+    id_level_1,
+    id_level_2=None,
+    n_shuffle=50,
+    parallel_shuffle=False, 
+    memory_limit='50GB',
+    save_intermediate_results=False,
+    dir_save_interm='~'):
+
+    # load nodes and edges of a specific group
+    str_group = f'{id_level_1}-{data_info[0]}_{id_level_2}-{data_info[1]}'
+    nodes = read_fct(net_dir / f'nodes_{str_group}.{extension}')
+    edges = read_fct(net_dir / f'edges_{str_group}.{extension}')
+
+    # compute network statistics
+    group_data = sample_assort_mixmat(nodes, edges, attributes, sample_id=str_group, 
+                                      n_shuffle=n_shuffle, parallel=parallel_shuffle, memory_limit=memory_limit)
+    if save_intermediate_results:
+        group_data.to_parquet(os.path.join(dir_save_interm, f'network_statistics_{str_group}.parquet'), index=False)
+    
+    return group_data
+
+
+def groups_assort_mixmat(
+        net_dir, 
+        attributes, 
+        id_level_1='patient',
+        id_level_2='sample', 
+        extension='parquet',
+        data_index=None,
+        n_shuffle=50,
+        parallel_groups='max', 
+        parallel_shuffle=False, 
+        memory_limit='50GB',
+        save_intermediate_results=False, 
+        dir_save_interm='~'):
+    """
+    Computed z-scored assortativity and mixing matrix elements for all
+    samples in a batch, cohort or other kind of groups.
+    
+    Parameters
+    ----------
+    net_dir: str or path object
+        Location of reconstructed networks data with nodes and edges files.
+    attributes: list
+        Categorical attributes considered in the mixing matrix.
+    id_level_1: str
+        Label in filenames used to identify the first level of data.
+    id_level_2: str or None
+        Label in filenames used to identify the second level of data.
+    extension: str
+        Extension used to save network data.
+    data_index: list(list) or list or None
+        Index of all groups, i.e. patients and their samples, or genes and their loci.
+    n_shuffle : int (default=50)
+        Number of attributes permutations.
+    parallel_groups : bool, int or str (default="max")
+        How parallelization across groups is performed.
+        If False, no parallelization is done.
+        If int, use this number of cores.
+        If 'max', use the maximum number of cores.
+        If 'max-1', use the max of cores minus 1.
+    parallel_shuffle : bool, int or str (default="False)
+        How parallelization across shuffle rounds is performed.
+        Parameter options are identical to `parallel_groups`.
+    memory_limit : str (default='50GB')
+        Dask memory limit for parallelization.
+    save_intermediate_results : bool (default=False)
+        If True network statistics are saved for each group.
+    dir_save_interm : str (default='~')
+        Directory where intermediate group network statistics are saved.
+        
+    Returns
+    -------
+    networks_stats : dataframe
+        Networks's statistics for all groups, including total number of nodes, 
+        attributes proportions, assortativity and mixing matrix elements, 
+        both raw and z-scored.
+    
+    Examples
+    --------
+    >>> nodes_high, edges_high = make_high_assort_net()
+    >>> nodes_low, edges_low = make_high_disassort_net()
+    >>> nodes = nodes_high.append(nodes_low, ignore_index=True)
+    >>> edges_low_shift = edges_low + nodes_high.shape[0]
+    >>> edges = edges_high.append(edges_low_shift)
+    >>> groups = pd.Series(['high'] * len(nodes_high) + ['low'] * len(nodes_low))
+    >>> net_stats = batch_assort_mixmat(nodes, edges, 
+                                        attributes=['a', 'b', 'c'], 
+                                        groups=groups, 
+                                        parallel_groups=False)
+    """
+
+    net_dir = Path(net_dir)
+    data_single_level = id_level_2 is not None
+    
+    if extension == 'parquet':
+        read_fct = partial(pd.read_parquet, columns=attributes)
+    elif extension == 'csv':
+        read_fct = partial(pd.read_csv, usecols=attributes)
+    
+    # build index of patients and samples files
+    if data_index is None:
+        data_index = []
+        len_ext = len(extension) + 1
+        len_l1 = len(id_level_1) + 1
+        len_l2 = len(id_level_2) + 1
+        files = net_dir.glob(f'edges_*.{extension}')
+        if not data_single_level:
+            for file in files:
+                # parse patient and sample description
+                file_name = file.name[6:-len_ext]
+                patient_info, sample_info = file_name.split('_')
+                patient_id = patient_info[len_l1:]
+                sample_id = sample_info[len_l2:]
+                
+                # add info to data index
+                data_index.append((patient_id, sample_id))
+    
+    groups_data = []
+ 
+    if parallel_groups is False:
+        for data_info in tqdm(data_index, desc='data'):
+            group_data = make_group_network_stats(
+                net_dir=net_dir,
+                data_info=data_info,
+                extension=extension,
+                read_fct=read_fct,
+                attributes=attributes,
+                id_level_1=id_level_1,
+                id_level_2=id_level_2,
+                n_shuffle=n_shuffle,
+                parallel_shuffle=parallel_shuffle, 
+                memory_limit=memory_limit,
+                save_intermediate_results=save_intermediate_results,
+                dir_save_interm=dir_save_interm,
+                )
             groups_data.append(group_data)
         networks_stats = pd.concat(groups_data, axis=0)
     else:
