@@ -353,7 +353,15 @@ def core_rand_mixmat(nodes, edges, attributes):
     mixmat_rand = mixing_matrix(nodes_rand, edges, attributes)
     return mixmat_rand
 
-def randomized_mixmat(nodes, edges, attributes, n_shuffle=50, parallel='max', memory_limit='50GB'):
+def randomized_mixmat(
+        nodes, 
+        edges, 
+        attributes, 
+        n_shuffle=50, 
+        parallel='max', 
+        memory_limit='10GB',
+        verbose=1,
+        ):
     """Randomize several times a network by shuffling the nodes' attributes.
     Then compute the mixing matrix and the corresponding assortativity coefficient.
     
@@ -386,7 +394,11 @@ def randomized_mixmat(nodes, edges, attributes, n_shuffle=50, parallel='max', me
     assort_rand = np.zeros(n_shuffle)
     
     if parallel is False:
-        for i in tqdm(range(n_shuffle), desc="randomization"):
+        if verbose > 0:
+            iterable = tqdm(range(n_shuffle), desc='randomization')
+        else:
+            iterable = range(n_shuffle)
+        for i in iterable:
             mixmat_rand[i] = core_rand_mixmat(nodes, edges, attributes)
             assort_rand[i] = attribute_ac(mixmat_rand[i])
     else:
@@ -427,7 +439,10 @@ def randomized_mixmat(nodes, edges, attributes, n_shuffle=50, parallel='max', me
 def zscore(mat, mat_rand, axis=0, return_stats=False):
     rand_mean = mat_rand.mean(axis=axis)
     rand_std = mat_rand.std(axis=axis)
-    zscore = (mat - rand_mean) / rand_std
+    # with warnings.simplefilter("ignore", category=RuntimeWarning):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        zscore = (mat - rand_mean) / rand_std
     if return_stats:
         return rand_mean, rand_std, zscore
     else:
@@ -484,7 +499,7 @@ def select_pairs_from_coords(coords_ids, pairs, how='inner', return_selector=Fal
     return pairs_selected
 
 def sample_assort_mixmat(nodes, edges, attributes, sample_id=None ,n_shuffle=50, 
-                         parallel='max', memory_limit='50GB'):
+                         parallel='max', memory_limit='10GB', verbose=1):
     """
     Computed z-scored assortativity and mixing matrix elements for 
     a network of a single sample.
@@ -532,9 +547,13 @@ def sample_assort_mixmat(nodes, edges, attributes, sample_id=None ,n_shuffle=50,
     assort = attribute_ac(mixmat)
 
     # ------ Randomization ------
-    print(f"randomization")
     np.random.seed(0)
-    mixmat_rand, assort_rand = randomized_mixmat(nodes, edges, attributes, n_shuffle=n_shuffle, parallel=parallel)
+    mixmat_rand, assort_rand = randomized_mixmat(
+        nodes, edges, attributes, 
+        n_shuffle=n_shuffle, 
+        parallel=parallel, 
+        memory_limit=memory_limit,
+        verbose=verbose)
     mixmat_mean, mixmat_std, mixmat_zscore = zscore(mixmat, mixmat_rand, return_stats=True)
     assort_mean, assort_std, assort_zscore = zscore(assort, assort_rand, return_stats=True)
 
@@ -694,42 +713,67 @@ def make_group_network_stats(
     data_info,
     extension,
     read_fct,
-    attributes,
     id_level_1,
     id_level_2=None,
+    attributes_col=None,
+    use_attributes=None, 
+    make_onehot=False,
     n_shuffle=50,
     parallel_shuffle=False, 
-    memory_limit='50GB',
+    memory_limit='10GB',
     save_intermediate_results=False,
-    dir_save_interm='~'):
+    dir_save_interm=None,
+    verbose=1):
+    """
+    Load the network data of a specific sample group, i.e. a specific pair
+    of  id_level_1 and id_level_2, and computes its mixing matrix elements
+    and assortativity.    
+    """
 
     # load nodes and edges of a specific group
     str_group = f'{id_level_1}-{data_info[0]}_{id_level_2}-{data_info[1]}'
     nodes = read_fct(net_dir / f'nodes_{str_group}.{extension}')
     edges = read_fct(net_dir / f'edges_{str_group}.{extension}')
 
+    # make dummy variables for attributes (ex: phenotype) if needed
+    if make_onehot:
+        nodes = nodes.join(pd.get_dummies(nodes[attributes_col], prefix='', prefix_sep=''))
+    if use_attributes is None:
+        use_attributes = np.unique(nodes[attributes_col])
     # compute network statistics
-    group_data = sample_assort_mixmat(nodes, edges, attributes, sample_id=str_group, 
-                                      n_shuffle=n_shuffle, parallel=parallel_shuffle, memory_limit=memory_limit)
+    group_data = sample_assort_mixmat(
+        nodes, edges, 
+        attributes=use_attributes, 
+        sample_id=str_group, 
+        n_shuffle=n_shuffle, 
+        parallel=parallel_shuffle, 
+        memory_limit=memory_limit, 
+        verbose=verbose)
+    
     if save_intermediate_results:
-        group_data.to_parquet(os.path.join(dir_save_interm, f'network_statistics_{str_group}.parquet'), index=False)
+        if dir_save_interm is None:
+            dir_save_interm = net_dir / '.temp'
+        dir_save_interm.mkdir(parents=True, exist_ok=True)
+        group_data.to_parquet(dir_save_interm / f'network_statistics_{str_group}.parquet', index=False)
     
     return group_data
 
 
 def groups_assort_mixmat(
         net_dir, 
-        attributes, 
+        attributes_col,
+        use_attributes=None, 
+        make_onehot=False,
         id_level_1='patient',
         id_level_2='sample', 
         extension='parquet',
         data_index=None,
         n_shuffle=50,
         parallel_groups='max', 
-        parallel_shuffle=False, 
-        memory_limit='50GB',
+        memory_limit='max',
         save_intermediate_results=False, 
-        dir_save_interm='~'):
+        dir_save_interm=None,
+        verbose=1):
     """
     Computed z-scored assortativity and mixing matrix elements for all
     samples in a batch, cohort or other kind of groups.
@@ -738,16 +782,21 @@ def groups_assort_mixmat(
     ----------
     net_dir: str or path object
         Location of reconstructed networks data with nodes and edges files.
-    attributes: list
-        Categorical attributes considered in the mixing matrix.
+    attributes_col: str or list
+        Column containing attributes, multiple columns if attributes are already one-hot encoded.
+    use_attributes: list
+        Categorical attributes considered in the mixing matrix (ex: phenotypes).
+    make_onehot: bool
+        If True, make one-hot encoded variables from `attributes_col`.
     id_level_1: str
-        Label in filenames used to identify the first level of data.
+        Label in filenames used to identify the first level of data (ex: patient_id).
     id_level_2: str or None
-        Label in filenames used to identify the second level of data.
+        Label in filenames used to identify the second level of data (ex: sample_id).
     extension: str
-        Extension used to save network data.
+        Extension used to save network data. Either 'parquet' (default) or 'csv'.
     data_index: list(list) or list or None
         Index of all groups, i.e. patients and their samples, or genes and their loci.
+        If None, the index is built from files in net_dir.
     n_shuffle : int (default=50)
         Number of attributes permutations.
     parallel_groups : bool, int or str (default="max")
@@ -756,15 +805,14 @@ def groups_assort_mixmat(
         If int, use this number of cores.
         If 'max', use the maximum number of cores.
         If 'max-1', use the max of cores minus 1.
-    parallel_shuffle : bool, int or str (default="False)
-        How parallelization across shuffle rounds is performed.
-        Parameter options are identical to `parallel_groups`.
-    memory_limit : str (default='50GB')
+    memory_limit : str (default='max')
         Dask memory limit for parallelization.
+        If 'max, will use 95% of the available free memory.
     save_intermediate_results : bool (default=False)
         If True network statistics are saved for each group.
-    dir_save_interm : str (default='~')
+    dir_save_interm : str (default=None)
         Directory where intermediate group network statistics are saved.
+        If None, data is saved in net_dir / '.temp'.
         
     Returns
     -------
@@ -788,12 +836,14 @@ def groups_assort_mixmat(
     """
 
     net_dir = Path(net_dir)
-    data_single_level = id_level_2 is not None
+    data_single_level = id_level_2 is None
     
+    if isinstance(attributes_col, str):
+        attributes_col = [attributes_col]
     if extension == 'parquet':
-        read_fct = partial(pd.read_parquet, columns=attributes)
+        read_fct = pd.read_parquet
     elif extension == 'csv':
-        read_fct = partial(pd.read_csv, usecols=attributes)
+        read_fct = pd.read_csv
     
     # build index of patients and samples files
     if data_index is None:
@@ -804,6 +854,7 @@ def groups_assort_mixmat(
         files = net_dir.glob(f'edges_*.{extension}')
         if not data_single_level:
             for file in files:
+                # print(file)
                 # parse patient and sample description
                 file_name = file.name[6:-len_ext]
                 patient_info, sample_info = file_name.split('_')
@@ -814,29 +865,39 @@ def groups_assort_mixmat(
                 data_index.append((patient_id, sample_id))
     
     groups_data = []
- 
+    
+    # redefine defaults values of the network analysis function
+    use_group_network_stats = partial(
+        make_group_network_stats,
+        net_dir=net_dir,
+        extension=extension,
+        read_fct=read_fct,
+        attributes_col=attributes_col,
+        use_attributes=use_attributes, 
+        make_onehot=make_onehot,
+        id_level_1=id_level_1,
+        id_level_2=id_level_2,
+        n_shuffle=n_shuffle,
+        parallel_shuffle=False,  # don't parallelize over iterations per network
+        memory_limit=memory_limit,
+        save_intermediate_results=save_intermediate_results,
+        dir_save_interm=dir_save_interm,
+        verbose=0)  # don't display iterations
+    
     if parallel_groups is False:
-        for data_info in tqdm(data_index, desc='data'):
-            group_data = make_group_network_stats(
-                net_dir=net_dir,
-                data_info=data_info,
-                extension=extension,
-                read_fct=read_fct,
-                attributes=attributes,
-                id_level_1=id_level_1,
-                id_level_2=id_level_2,
-                n_shuffle=n_shuffle,
-                parallel_shuffle=parallel_shuffle, 
-                memory_limit=memory_limit,
-                save_intermediate_results=save_intermediate_results,
-                dir_save_interm=dir_save_interm,
-                )
+        if verbose > 0:
+            iterable = tqdm(data_index, desc='data')
+        else:
+            iterable = data_index
+        for data_info in iterable:
+            group_data = use_group_network_stats(data_info=data_info)
             groups_data.append(group_data)
         networks_stats = pd.concat(groups_data, axis=0)
     else:
         from multiprocessing import cpu_count
         from dask.distributed import Client, LocalCluster
         from dask import delayed
+        from dask.diagnostics import ProgressBar
         
         # select the right number of cores
         nb_cores = cpu_count()
@@ -846,22 +907,27 @@ def groups_assort_mixmat(
             use_cores = nb_cores - 1
         elif parallel_groups == 'max':
             use_cores = nb_cores
+        if memory_limit == 'max':
+            total_memory, used_memory, free_memory = map(
+                int, os.popen('free -t -m').readlines()[-1].split()[1:])
+            memory_limit = str(int(0.95 * free_memory/1000)) + 'GB'
+
         # set up cluster and workers
-        cluster = LocalCluster(n_workers=use_cores, 
-                               threads_per_worker=1,
-                               memory_limit=memory_limit)
-        client = Client(cluster)
-        
-        for group in groups.unique():
-            # select nodes and edges of a specific group
-            nodes_edges_sel = delayed(_select_nodes_edges_from_group)(nodes, edges, group, groups)
-            # individual samples z-score stats are not parallelized over shuffling rounds
-            # because parallelization is already done over samples
-            group_data = delayed(sample_assort_mixmat)(nodes_edges_sel[0], nodes_edges_sel[1], attributes, sample_id=group, 
-                                                       n_shuffle=n_shuffle, parallel=parallel_shuffle) 
-            groups_data.append(group_data)
-        # evaluate the parallel computation
-        networks_stats = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
+        with LocalCluster(
+            n_workers=use_cores,
+            processes=True,
+            threads_per_worker=1,
+            memory_limit=memory_limit,
+            ) as cluster, Client(cluster) as client:
+                # TODO: add dask's progressbar
+                for data_info in data_index:
+                    # select nodes and edges of a specific group
+                    group_data = delayed(use_group_network_stats)(data_info=data_info)
+                    groups_data.append(group_data)
+                # evaluate the parallel computation
+                # ProgressBar().register()
+                networks_stats = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
+
     return networks_stats
     
 ############ Neighbors Aggegation Statistics ############
