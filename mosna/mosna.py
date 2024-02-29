@@ -19,6 +19,8 @@ from scipy.stats import mannwhitneyu # Mann-Whitney rank test
 from scipy.stats import ks_2samp     # Kolmogorov-Smirnov statistic
 from statsmodels.stats.multitest import fdrcorrection
 import statsmodels.api as sm
+from lifelines import KaplanMeierFitter
+from lifelines.statistics import logrank_test
 import warnings
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import StandardScaler
@@ -32,6 +34,7 @@ import igraph as ig
 import leidenalg as la
 import colorcet as cc
 import re
+from typing import Optional, Any, List, Tuple, Union, Iterable, Callable, Dict, Set
 
 from multiprocessing import cpu_count
 from dask.distributed import Client, LocalCluster, progress
@@ -2073,6 +2076,159 @@ def color_val_inf(val, thresh=0.05, col='green', col_back='white'):
     """
     color = col if val < thresh else col_back
     return 'color: %s' % color
+
+
+def get_significant_coefficients(
+    df: pd.DataFrame, 
+    lower_col: str = '95% lower-bound', 
+    upper_col: str = '95% upper-bound', 
+    variables_in: str = 'index') -> Iterable[str]:
+    """"
+    Pick variables with significant coefficients in a predictive model.
+
+    Parameters
+    ----------
+    df : dataframe
+        Coefficients with lower and upper confidence intervals.
+    lower_col : str
+        Column storing the lower bound
+    upper_col : str
+        Column storing the upper bound
+    variables_in : str
+        If 'index', variables are selected from the index, otherwise
+        they are selected from the column indicated by variables_in.
+    
+    Returns
+    -------
+    variables : Iterable[str]
+        Variables with significant coefficients.
+    """
+    select = np.logical_or(
+        np.logical_and(df[lower_col] < 0, df[upper_col] < 0),
+        np.logical_and(df[lower_col] > 0, df[upper_col] > 0))
+    if variables_in == 'index':
+        variables = df.index.values[select]
+    else:
+        variables = df.loc[select, variables_in]
+    return variables
+
+
+def find_best_survival_threshold(
+    data: pd.DataFrame, 
+    variable_name: str, 
+    duration_col: str, 
+    event_col: str, 
+    perc_range: Tuple[int, int, int] = (10, 91, 10)
+    ) -> Tuple[float, int, float]:
+    """
+    Find the threshold that minimizes the p-value of the log-rank test.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Survival data.
+    variable_name : str
+        Column to use in data. 
+    duration_col : str
+        Column for survival duration.
+    event_col : str
+        Column for survival event (death).
+    perc_range : Tuple[int, int, int]
+        Parameters to generate the percentiles used as potential thresholds.
+    
+    Returns
+    -------
+    best_thresh : float
+        Best threshold.
+    best_perc : int
+        Best percentile.
+    best_pval : float
+        Best p-value. 
+    """
+    
+    variable = data[variable_name]
+    T = data[duration_col]
+    E = data[event_col]
+    
+    all_perc = np.arange(*perc_range)
+    all_thresh = []
+    all_pvals = []
+    for perc in all_perc:
+        thresh = np.percentile(variable, perc)
+        select = (variable > thresh)
+        p_val = logrank_test(T[select], T[~select], E[select], E[~select], alpha=.99).p_value
+        all_thresh.append(thresh)
+        all_pvals.append(p_val)
+
+    best_idx = np.argmin(all_pvals)
+    best_thresh = all_thresh[best_idx]
+    best_perc = all_perc[best_idx]
+    best_pval = all_pvals[best_idx]
+
+    return best_thresh, best_perc, best_pval
+
+
+def plot_survival_threshold(
+    data: pd.DataFrame, 
+    variable_name: str, 
+    duration_col: str, 
+    event_col: str, 
+    thresh: float, 
+    with_confidence: bool = True,
+    ax: plt.Axes = None
+    ) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Plot Kaplan-Meier curves of observations discriminated by a threshold.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Survival data.
+    variable_name : str
+        Column to use in data. 
+    duration_col : str
+        Column for survival duration.
+    event_col : str
+        Column for survival event (death).
+    thresh : float
+        Threshold applied on variable.
+    with_confidence : bool
+        If True, KM curves are plotted with estimated confidence intervals.
+    ax : plt.Axes
+        Existing pyplot ax if any to draw KM curves.
+    
+    Returns
+    -------
+    fig : plt.Figure
+        Figure of KM curves.
+    ax : plt.Axes
+        Axes of KM curves.
+    """
+    
+    kmf_1 = KaplanMeierFitter()
+    kmf_2 = KaplanMeierFitter()
+
+    variable = data[variable_name]
+    T = data[duration_col]
+    E = data[event_col]
+    select = (variable > thresh)
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.get_figure()
+
+    kmf_1.fit(T[select], event_observed=E[select], label=f">   {thresh:.3g}")
+    kmf_2.fit(T[~select], event_observed=E[~select], label=f"<= {thresh:.3g}")
+    if with_confidence:
+        kmf_1.plot_survival_function(ax=ax)
+        kmf_2.plot_survival_function(ax=ax)
+    else:
+        kmf_1.survival_function_.plot(ax=ax)
+        kmf_2.survival_function_.plot(ax=ax)
+
+    ax.set_title(f"Survival given {variable_name}")
+    return fig, ax
 
 
 def find_survival_variable(surv, X, reverse_response=False, return_table=True, return_model=True, model_kwargs=None, model_fit=None):
