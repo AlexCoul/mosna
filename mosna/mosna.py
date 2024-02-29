@@ -1592,7 +1592,14 @@ def plot_niches_composition(counts=None, var=None, niches=None, var_label='varia
 
 ###### Survival and response statistics ######
 
-def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, axis=0, verbose=1):
+def clean_data(
+        data, 
+        method='mixed', 
+        thresh=1, 
+        cat_cols=None, 
+        modify_infs=True, 
+        axis=0, 
+        verbose=1):
     """
     Delete or impute missing or non finite data.
     During imputation, they are replaced by continuous values, not by binary values.
@@ -1630,7 +1637,8 @@ def clean_data(data, method='mixed', thresh=1, cat_cols=None, modify_infs=True, 
     nb_nan = to_nan.sum()
     if nb_nan != 0:
         if verbose > 0: 
-            print(f"There are {nb_nan} non finite values")
+            perc_nan = 100 * nb_nan / to_nan.size
+            print(f"There are {nb_nan} non finite values ({perc_nan:.1f}%)")
         # set also inf values to nan
         if modify_infs:
             data[to_nan] = np.nan
