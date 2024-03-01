@@ -763,22 +763,22 @@ def make_group_network_stats(
 
 
 def groups_assort_mixmat(
-        net_dir, 
-        attributes_col,
-        use_attributes=None, 
-        make_onehot=False,
-        id_level_1='patient',
-        id_level_2='sample', 
-        extension='parquet',
-        data_index=None,
-        n_shuffle=50,
-        parallel_groups='max', 
-        memory_limit='max',
-        save_intermediate_results=False, 
-        dir_save_interm=None,
-        verbose=1):
+    net_dir, 
+    attributes_col,
+    use_attributes=None, 
+    make_onehot=False,
+    id_level_1='patient',
+    id_level_2='sample', 
+    extension='parquet',
+    data_index=None,
+    n_shuffle=50,
+    parallel_groups='max', 
+    memory_limit='max',
+    save_intermediate_results=False, 
+    dir_save_interm=None,
+    verbose=1):
     """
-    Computed z-scored assortativity and mixing matrix elements for all
+    Compute z-scored assortativity and mixing matrix elements for all
     samples in a batch, cohort or other kind of groups.
     
     Parameters
@@ -1095,7 +1095,7 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
 
     Returns
     -------
-    aggreg : dataframe
+    nas : dataframe
         Neighbors Aggregation Statistics of X.
         
     Examples
@@ -1105,8 +1105,8 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     >>> pairs = np.array([[0, 1],
                           [2, 3],
                           [3, 4]])
-    >>> aggreg = aggregate_k_neighbors(X, pairs, stat_funcs=[np.mean, np.max], stat_names=['mean', 'max'], var_sep=' - ')
-    >>> aggreg.values
+    >>> nas = aggregate_k_neighbors(X, pairs, stat_funcs=[np.mean, np.max], stat_names=['mean', 'max'], var_sep=' - ')
+    >>> nas.values
     array([[ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
            [ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
            [25., 26., 27., 28., 29., 30., 31., 32., 33., 34.],
@@ -1126,7 +1126,7 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     elif isinstance(stat_names, str):
         stat_names = [stat_names]
     nb_funcs = len(stat_funcs)
-    aggreg = np.zeros((nb_obs, nb_var*nb_funcs))
+    nas = np.zeros((nb_obs, nb_var*nb_funcs))
 
     # check if other info as source and target are in pairs and clean array
     if pairs.shape[1] > 2:
@@ -1137,7 +1137,7 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
         all_neigh = neighbors_k_order(pairs, n=i, order=order)
         neigh = flatten_neighbors(all_neigh)
         for j, (stat_func, stat_name) in enumerate(zip(stat_funcs, stat_names)):
-            aggreg[i, j*nb_var : (j+1)*nb_var] = stat_func(X[neigh,:], axis=0)
+            nas[i, j*nb_var : (j+1)*nb_var] = stat_func(X[neigh,:], axis=0)
         
     if var_names is None:
         var_names = [str(i) for i in range(nb_var)]
@@ -1145,9 +1145,188 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     for stat_name in stat_names:
         stat_str = var_sep + stat_name
         columns = columns + [var + stat_str for var in var_names]
-    aggreg = pd.DataFrame(data=aggreg, columns=columns)
+    nas = pd.DataFrame(data=nas, columns=columns)
     
-    return aggreg
+    return nas
+
+
+def compute_NAS_single_network(
+    net_dir, 
+    data_info,
+    extension,
+    read_fct,
+    attributes_col,
+    id_level_1,
+    id_level_2=None, 
+    use_attributes=None, 
+    make_onehot=False,
+    order=1, 
+    stat_funcs='default', 
+    stat_names='default', 
+    var_sep=' ',
+    memory_limit='10GB',
+    save_intermediate_results=False, 
+    dir_save_interm=None,
+    add_sample_info=True,
+    verbose=1):
+    """
+    Compute the Neighbors Aggregation Statistics for a single network.
+    """
+
+    # load nodes and edges of a specific group
+    str_group = f'{id_level_1}-{data_info[0]}_{id_level_2}-{data_info[1]}'
+    nodes = read_fct(net_dir / f'nodes_{str_group}.{extension}')
+    edges = read_fct(net_dir / f'edges_{str_group}.{extension}')
+
+    # make dummy variables for attributes (ex: phenotype) if needed
+    if make_onehot:
+        nodes = nodes.join(pd.get_dummies(nodes[attributes_col], prefix='', prefix_sep=''))
+    if use_attributes is None:
+        use_attributes = np.unique(nodes[attributes_col])
+    else:
+        # handle missing columns
+        missing_cols = set(use_attributes).difference(np.unique(nodes[attributes_col]))
+        for col in missing_cols:
+            nodes[col] = 0
+    
+    # compute Neighbors Aggregation Statistics
+    nas = aggregate_k_neighbors(
+        nodes[use_attributes].astype(float).values, 
+        edges.values, 
+        order=order, 
+        var_names=use_attributes, 
+        stat_funcs=stat_funcs, 
+        stat_names=stat_names, 
+        var_sep=var_sep)
+    if add_sample_info:
+        nas[id_level_1] = data_info[0]
+        nas[id_level_2] = data_info[1]
+    
+    if save_intermediate_results:
+        if dir_save_interm is None:
+            dir_save_interm = net_dir / '.temp'
+        dir_save_interm.mkdir(parents=True, exist_ok=True)
+        nas.to_parquet(dir_save_interm / f'nas_{str_group}.parquet', index=False)
+    
+    return nas
+
+
+def compute_NAS_all_networks(
+    net_dir, 
+    attributes_col,
+    use_attributes=None, 
+    make_onehot=False,
+    id_level_1='patient',
+    id_level_2='sample', 
+    extension='parquet',
+    data_index=None,
+    parallel_groups='max', 
+    memory_limit='max',
+    save_intermediate_results=False, 
+    dir_save_interm=None,
+    add_sample_info=True,
+    verbose=1):
+    """
+    Compute the Neighbors Aggregation Statistics for all
+    samples in a batch, cohort or other kind of groups.
+
+    Parameters
+    ----------
+    """
+
+    net_dir = Path(net_dir)
+    data_single_level = id_level_2 is None
+    
+    if isinstance(attributes_col, str):
+        attributes_col = [attributes_col]
+    if extension == 'parquet':
+        read_fct = pd.read_parquet
+    elif extension == 'csv':
+        read_fct = pd.read_csv
+    
+    # build index of patients and samples files
+    if data_index is None:
+        data_index = []
+        len_ext = len(extension) + 1
+        len_l1 = len(id_level_1) + 1
+        len_l2 = len(id_level_2) + 1
+        files = net_dir.glob(f'edges_*.{extension}')
+        if not data_single_level:
+            for file in files:
+                # print(file)
+                # parse patient and sample description
+                file_name = file.name[6:-len_ext]
+                patient_info, sample_info = file_name.split('_')
+                patient_id = patient_info[len_l1:]
+                sample_id = sample_info[len_l2:]
+                
+                # add info to data index
+                data_index.append((patient_id, sample_id))
+    
+    groups_data = []
+    
+    # redefine defaults values of the network analysis function
+    use_compute_NAS_single_network = partial(
+        compute_NAS_single_network,
+        net_dir=net_dir,
+        extension=extension,
+        read_fct=read_fct,
+        attributes_col=attributes_col,
+        use_attributes=use_attributes, 
+        make_onehot=make_onehot,
+        id_level_1=id_level_1,
+        id_level_2=id_level_2,
+        memory_limit=memory_limit,
+        save_intermediate_results=save_intermediate_results,
+        dir_save_interm=dir_save_interm,
+        add_sample_info=add_sample_info,
+        verbose=0)  # don't display iterations
+    
+    if parallel_groups is False:
+        if verbose > 0:
+            iterable = tqdm(data_index, desc='data')
+        else:
+            iterable = data_index
+        for data_info in iterable:
+            group_data = use_compute_NAS_single_network(data_info=data_info)
+            groups_data.append(group_data)
+        nas = pd.concat(groups_data, axis=0)
+    else:
+        from multiprocessing import cpu_count
+        from dask.distributed import Client, LocalCluster
+        from dask import delayed
+        from dask.diagnostics import ProgressBar
+        
+        # select the right number of cores
+        nb_cores = cpu_count()
+        if isinstance(parallel_groups, int):
+            use_cores = min(parallel_groups, nb_cores)
+        elif parallel_groups == 'max-1':
+            use_cores = nb_cores - 1
+        elif parallel_groups == 'max':
+            use_cores = nb_cores
+        if memory_limit == 'max':
+            total_memory, used_memory, free_memory = map(
+                int, os.popen('free -t -m').readlines()[-1].split()[1:])
+            memory_limit = str(int(0.95 * free_memory/1000)) + 'GB'
+
+        # set up cluster and workers
+        with LocalCluster(
+            n_workers=use_cores,
+            processes=True,
+            threads_per_worker=1,
+            memory_limit=memory_limit,
+            ) as cluster, Client(cluster) as client:
+                # TODO: add dask's progressbar
+                for data_info in data_index:
+                    # select nodes and edges of a specific group
+                    group_data = delayed(use_compute_NAS_single_network)(data_info=data_info)
+                    groups_data.append(group_data)
+                # evaluate the parallel computation
+                # ProgressBar().register()
+                nas = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
+
+    return nas
 
 
 def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_sizes, processed_dir, soft_clustering=True, 
@@ -2060,7 +2239,7 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
                        cbar_pos=cbar_pos, cbar_kws=cbar_kws)
     g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=fontsize);
-    if hasattr(g, 'ax_row_colors'):
+    if hasattr(g, 'ax_row_colors') and colors is not None:
         g.ax_row_colors.set_xticklabels(g.ax_row_colors.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     if return_data:
         return g, data
