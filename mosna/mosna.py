@@ -25,6 +25,7 @@ import warnings
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn import linear_model
+import xgboost
 from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
 import hdbscan
@@ -1072,7 +1073,7 @@ def flatten_neighbors(all_neigh):
 
     return flat_neigh
 
-def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default', stat_names='default', var_sep=' '):
+def make_features_NAS(X, pairs, order=1, var_names=None, stat_funcs='default', stat_names='default', var_sep=' '):
     """
     Compute the statistics on aggregated variables across
     the k order neighbors of each node in a network.
@@ -1109,7 +1110,7 @@ def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default
     >>> pairs = np.array([[0, 1],
                           [2, 3],
                           [3, 4]])
-    >>> nas = aggregate_k_neighbors(X, pairs, stat_funcs=[np.mean, np.max], stat_names=['mean', 'max'], var_sep=' - ')
+    >>> nas = make_features_NAS(X, pairs, stat_funcs=[np.mean, np.max], stat_names=['mean', 'max'], var_sep=' - ')
     >>> nas.values
     array([[ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
            [ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
@@ -1194,7 +1195,7 @@ def compute_NAS_single_network(
             nodes[col] = 0
     
     # compute Neighbors Aggregation Statistics
-    nas = aggregate_k_neighbors(
+    nas = make_features_NAS(
         nodes[use_attributes].astype(float).values, 
         edges.values, 
         order=order, 
@@ -1396,7 +1397,7 @@ def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_siz
             var_aggreg = pd.read_csv(file_path)
         else:
             print("computing var_aggreg...", end=' ')
-            var_aggreg = aggregate_k_neighbors(X=X, pairs=pairs, order=order, var_names=markers)
+            var_aggreg = make_features_NAS(X=X, pairs=pairs, order=order, var_names=markers)
             if not os.path.exists(aggreg_dir):
                 os.makedirs(aggreg_dir)
             var_aggreg.to_csv(file_path, index=False)
@@ -1509,7 +1510,7 @@ def screen_nas_parameters_parallel(
         if os.path.exists(file_path):
             var_aggreg = pd.read_csv(file_path)
         else:
-            var_aggreg = aggregate_k_neighbors(X=X, pairs=pairs, order=order, var_names=markers)
+            var_aggreg = make_features_NAS(X=X, pairs=pairs, order=order, var_names=markers)
             var_aggreg.to_csv(file_path, index=False)
         if downsample:
             var_aggreg = var_aggreg.loc[::downsample, :]
@@ -1685,6 +1686,31 @@ def plot_screened_parameters(obj, cell_pos_cols, cell_type_col, orders, dim_clus
                             plt.close()
 
 
+def make_features_STARGATE(
+    X: np.array, 
+    pairs: np.array, 
+    var_names: Tuple[Iterable[str], None] = None,
+    ) -> pd.Dataframe:
+    """
+    Compute feature vectors of each node in a network
+    given the STARGATE method.
+
+    Parameters
+    ----------
+    X : array_like
+        Nodes' attributes on which features are computed.
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    var_names : list
+        Names of variables of X.
+
+    Returns
+    -------
+    feats : dataframe
+        Features computed with the STARGATE method.
+    """
+    # code here
+    pass
 
 
 def make_cluster_cmap(labels, grey_pos='end', saturated_first=True, as_mpl_cmap=False):
@@ -2811,23 +2837,24 @@ def stepwise_regression(X, y=None,
             return model, included
 
 
-def logistic_regression(data, 
-                        y=None,
-                        y_name=None,
-                        y_values=None,
-                        col_drop=None, 
-                        cv_train=5, 
-                        cv_adapt=True, 
-                        cv_max=10, 
-                        l1_ratios_list='auto', 
-                        dir_save=None,
-                        plot_coefs=True,
-                        save_coefs=False,
-                        save_scores=False,
-                        save_plot_figures=False,
-                        figsize=(8, 8),
-                        verbose=1,
-                        ):
+def logistic_regression(
+    data, 
+    y=None,
+    y_name=None,
+    y_values=None,
+    col_drop=None, 
+    cv_train=5, 
+    cv_adapt=True, 
+    cv_max=10, 
+    l1_ratios_list='auto', 
+    dir_save=None,
+    plot_coefs=True,
+    save_coefs=False,
+    save_scores=False,
+    save_plot_figures=False,
+    figsize=(8, 8),
+    verbose=1,
+    ):
     """
     Train logistic regression models looking for the best hyperparameters
     for the ElasticNet penalization, and dislay or save results and models.
@@ -2999,6 +3026,30 @@ def logistic_regression(data,
         print(f"Training took {duration:.3f}s")
 
     return models
+
+
+def train_XGBoost(
+    data: pd.DataFrame, 
+    y: Iterable = None,
+    ) -> xgboost.core.Booster:
+    """
+    Train an XGBoost model.
+
+    Parameters
+    ----------
+    data : DataFrame
+        Table containing predictive variables.
+    y : array_like, optional
+        Response / target variable.
+
+    Returns
+    -------
+    model : xgboost
+        Trained XGBoost model
+    """
+    # training code here
+    pass
+
 
 # ------ Risk ratios ------
 
