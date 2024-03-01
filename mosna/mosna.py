@@ -27,7 +27,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn import linear_model
 from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
-import umap
 import hdbscan
 import composition_stats as cs
 import igraph as ig
@@ -42,6 +41,11 @@ from dask import delayed
 import dask
 
 from tysserand import tysserand as ty
+
+try:
+    from cuml import UMAP
+except:
+    from umap import UMAP
 
 
 
@@ -1408,7 +1412,7 @@ def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_siz
             embed_viz = np.loadtxt(file_path, delimiter=',')
         else:
             print("computing embed_viz...", end=' ')
-            embed_viz = umap.UMAP(n_components=2, n_neighbors=n_neighbors, random_state=0).fit_transform(var_aggreg)
+            embed_viz = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=0).fit_transform(var_aggreg)
             np.savetxt(file_path, embed_viz, fmt='%.18e', delimiter=',', newline='\n')
             print("done")
         
@@ -1423,7 +1427,7 @@ def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_siz
                 embed_clust_orig = np.loadtxt(file_path, delimiter=',')
             else:
                 print("    computing embed_clust_orig...", end=' ')
-                embed_clust_orig = umap.UMAP(n_neighbors=n_neighbors, **args_reduc).fit_transform(var_aggreg)
+                embed_clust_orig = UMAP(n_neighbors=n_neighbors, **args_reduc).fit_transform(var_aggreg)
                 np.savetxt(file_path, embed_clust_orig, fmt='%.18e', delimiter=',', newline='\n')
                 print("done")
 
@@ -1516,7 +1520,7 @@ def screen_nas_parameters_parallel(
         if os.path.exists(file_path):
             embed_viz = np.loadtxt(file_path, delimiter=',')
         else:
-            embed_viz = umap.UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
+            embed_viz = UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
             np.savetxt(file_path, embed_viz, fmt='%.18e', delimiter=',', newline='\n')
         
         # Dimension reduction for clustering
@@ -2471,7 +2475,7 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
     else:
         if verbose > 0: print("Computing dimensionality reduction")
         if reducer_type == 'umap':
-            reducer = umap.UMAP(
+            reducer = UMAP(
                 random_state=random_state,
                 n_components=n_components,
                 n_neighbors=n_neighbors,
