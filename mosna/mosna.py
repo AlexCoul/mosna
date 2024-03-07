@@ -1690,7 +1690,7 @@ def make_features_STARGATE(
     X: np.array, 
     pairs: np.array, 
     var_names: Tuple[Iterable[str], None] = None,
-    ) -> pd.Dataframe:
+    ) -> pd.DataFrame:
     """
     Compute feature vectors of each node in a network
     given the STARGATE method.

@@ -23,14 +23,14 @@ setup(
                  'Operating System :: OS Independent'],
     packages=find_packages(exclude=['build', 'docs', 'templates', 'data']),
     include_package_data=True,
-    install_requires=['matplotlib>=2.2.3', 'numpy', 'seaborn',
-                      'pandas>=1.4.3','scipy', 'statsmodels', 
+    install_requires=['matplotlib', 'numpy', 'seaborn',
+                      'pandas','scipy', 'statsmodels', 
                       'scikit-image', 'scikit-learn', 'ipykernel',
                       'pyarrow', 'tqdm', 'napari', 'colorcet',
-                      'composition_stats', 'tysserand', 'ipywidgets',
+                      'composition_stats', 'tysserand', 
                       'igraph', 'leidenalg', 'openpyxl', 'odfpy',
                       'fastcluster', 'lifelines', 'hdbscan', 'umap-learn',
-                      'dask',
+                      'dask', 'xgboost',
                      ],
     keywords = 'spatial networks cells transcriptomics sociology econometrics'
 )
