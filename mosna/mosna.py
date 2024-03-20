@@ -1095,7 +1095,7 @@ def make_features_NAS(X, pairs, order=1, var_names=None, stat_funcs='default', s
         Names of the statistical functions used on aggregated data.
         If 'default' 'mean' and 'std' are used.
     var_sep : str
-        Separation between variables names and statistical functions names
+        Separation between variables names and statistical functions names.
         Default is ' '.
 
     Returns
@@ -1156,41 +1156,103 @@ def make_features_NAS(X, pairs, order=1, var_names=None, stat_funcs='default', s
 
 
 def compute_NAS_single_network(
-    net_dir, 
-    data_info,
-    extension,
-    read_fct,
-    attributes_col,
-    id_level_1,
-    id_level_2=None, 
-    use_attributes=None, 
-    make_onehot=False,
-    order=1, 
-    stat_funcs='default', 
-    stat_names='default', 
-    var_sep=' ',
-    memory_limit='10GB',
-    save_intermediate_results=False, 
-    dir_save_interm=None,
-    add_sample_info=True,
-    verbose=1):
+    net_dir: Union[str, Path], 
+    data_info: List[str],
+    extension: str,
+    read_fct: Callable,
+    id_level_1: str,
+    id_level_2: Union[str, None] = None, 
+    attributes_col: Union[Iterable, None] = None,
+    use_attributes: Union[Iterable, None] = None, 
+    make_onehot: bool = False,
+    order: int = 1, 
+    stat_funcs: Union[str, List[Callable]] = 'default', 
+    stat_names: Union[str, List[str]] = 'default', 
+    var_sep: str = ' ',
+    save_intermediate_results: bool = False, 
+    dir_save_interm: Union[str, Path, None] = None,
+    add_sample_info: bool = True,
+    verbose: int = 1,
+    ) -> pd.DataFrame:
     """
     Compute the Neighbors Aggregation Statistics for a single network.
+
+    Parameters
+    ----------
+    net_dir : Union[str, Path]
+        Directory where network files are stored.
+    data_info : List[str, str]
+        Identifier IDs of sample, e.g. patient id and sample id.
+    extension : str
+        File format of network files.
+    read_fct : Callable
+        Function used to load network files.
+    id_level_1 : str
+        Identifier of the first level of the dataset, like
+        'patient' or 'chromosome'.
+    id_level_2 : Union[str, None], None
+        Identifier of the second level of the dataset, like 
+        'sample' or 'locus'.
+    attributes_col : Union[Iterable, None]
+        Unique columns storing attributes, like cell types, or
+        list of columns used to aggregate variables. 
+        If None, all columns are used.
+    use_attributes : Union[Iterable, None], None
+        If provided, subset of variables used for aggregation.
+    make_onehot : bool, False
+        If True, convert a single column into multiple columns.
+    order : int, 1 
+        Maximum order of neighborhoud for aggregation.
+    stat_funcs : Union[str, List[Callable]], 'default'
+        Statistics functions to use on aggregated data. 
+        If 'default' np.mean and np.std are use.
+        All functions are used with the `axis=0` argument.
+    stat_names : Union[str, List[str]], 'default' 
+        Names of the statistical functions used on aggregated data.
+        If 'default' 'mean' and 'std' are used.
+    var_sep : str, ' '
+        Separation between variables names and statistical functions names.
+    save_intermediate_results : bool, False 
+        If True, save results for each network.
+    dir_save_interm : Union[str, Path, None], None
+        Directory of intermediate results.
+    add_sample_info : bool, True
+        If True, add sample information to the final NAS table.
+    verbose : int, 1
+        Level of information displayed.
+    
+    Returns
+    -------
+    nas : pd.DataFrame
+        Table of Neighbors Aggregated Statistics.
     """
 
     # load nodes and edges of a specific group
-    str_group = f'{id_level_1}-{data_info[0]}_{id_level_2}-{data_info[1]}'
+    if len(data_info) == 1:
+        str_group = f'{id_level_1}-{data_info[0]}'
+    elif len(data_info) == 2:
+        str_group = f'{id_level_1}-{data_info[0]}_{id_level_2}-{data_info[1]}'
     nodes = read_fct(net_dir / f'nodes_{str_group}.{extension}')
     edges = read_fct(net_dir / f'edges_{str_group}.{extension}')
 
+    if attributes_col is None:
+        attributes_col = nodes.columns
+
     # make dummy variables for attributes (ex: phenotype) if needed
     if make_onehot:
+        assert len(attributes_col) == 1, "`attributes_col` has to be of length 1 to make dummy variables"
         nodes = nodes.join(pd.get_dummies(nodes[attributes_col], prefix='', prefix_sep=''))
     if use_attributes is None:
-        use_attributes = np.unique(nodes[attributes_col])
+        if len(attributes_col) == 1:
+            use_attributes = np.unique(nodes[attributes_col])
+        else:
+            use_attributes = attributes_col
     else:
         # handle missing columns
-        missing_cols = set(use_attributes).difference(np.unique(nodes[attributes_col]))
+        if len(attributes_col) == 1:
+           missing_cols = set(use_attributes).difference(np.unique(nodes[attributes_col]))
+        else:
+           missing_cols = set(use_attributes).difference(np.unique(attributes_col))
         for col in missing_cols:
             nodes[col] = 0
     
@@ -1217,26 +1279,62 @@ def compute_NAS_single_network(
 
 
 def compute_NAS_all_networks(
-    net_dir, 
-    attributes_col,
-    use_attributes=None, 
-    make_onehot=False,
-    id_level_1='patient',
-    id_level_2='sample', 
-    extension='parquet',
-    data_index=None,
-    parallel_groups='max', 
-    memory_limit='max',
-    save_intermediate_results=False, 
-    dir_save_interm=None,
-    add_sample_info=True,
-    verbose=1):
+    net_dir: Union[str, Path],  
+    attributes_col: Union[str, Iterable, None] = None,
+    use_attributes: Union[Iterable, None] = None,  
+    make_onehot: bool = False,
+    order: int = 1, 
+    id_level_1: str = 'patient',
+    id_level_2: str = 'sample', 
+    extension: str = 'parquet',
+    data_index: Union[List[Tuple], None]=None,
+    parallel_groups: Union[bool, int, str] = 'max', 
+    memory_limit: str = 'max',
+    save_intermediate_results: bool = False, 
+    dir_save_interm: Union[str, Path, None] = None,
+    add_sample_info: bool = True,
+    verbose: int = 1,
+    ) -> pd.DataFrame:
     """
     Compute the Neighbors Aggregation Statistics for all
     samples in a batch, cohort or other kind of groups.
 
     Parameters
     ----------
+    net_dir : Union[str, Path]
+        Directory where network files are stored.
+    attributes_col : Union[str, Iterable, None], None
+        Unique columns storing attributes, like cell types, or
+        list of columns used to aggregate variables. 
+        If None, all columns are used.
+    use_attributes : Union[Iterable, None], None
+        If provided, subset of variables used for aggregation.
+    make_onehot : bool, False
+        If True, convert a single column into multiple columns.
+    order : int, 1 
+        Maximum order of neighborhoud for aggregation.
+    id_level_1 : str
+        Identifier of the first level of the dataset, like
+        'patient' or 'chromosome'.
+    id_level_2 : Union[str, None], None
+        Identifier of the second level of the dataset, like 
+        'sample' or 'locus'.
+    extension : str
+        File format of network files.
+    data_index : Union[List[Tuple], None], None
+        List of identifier IDs of network files.
+    parallel_groups : Union[bool, int, str], 'max'
+        Computation is run on a single CPU if False, on the specified 
+        number of CPU if it is an integer, or on the max or max-1 
+        number of CPUS if it is a string.
+    memory_limit : str, 'max'
+        Maximum memory used by Dask during parallel computation.
+        Use either 'max' or 'XX GB'.
+    
+    Returns
+    -------
+    nas : pd.DataFrame
+        Table of Neighbors Aggregated Statistics.
     """
 
     net_dir = Path(net_dir)
@@ -1279,9 +1377,9 @@ def compute_NAS_all_networks(
         attributes_col=attributes_col,
         use_attributes=use_attributes, 
         make_onehot=make_onehot,
+        order=order,
         id_level_1=id_level_1,
         id_level_2=id_level_2,
-        memory_limit=memory_limit,
         save_intermediate_results=save_intermediate_results,
         dir_save_interm=dir_save_interm,
         add_sample_info=add_sample_info,
@@ -1300,7 +1398,6 @@ def compute_NAS_all_networks(
         from multiprocessing import cpu_count
         from dask.distributed import Client, LocalCluster
         from dask import delayed
-        from dask.diagnostics import ProgressBar
         
         # select the right number of cores
         nb_cores = cpu_count()
@@ -1689,7 +1786,7 @@ def plot_screened_parameters(obj, cell_pos_cols, cell_type_col, orders, dim_clus
 def make_features_STARGATE(
     X: np.array, 
     pairs: np.array, 
-    var_names: Tuple[Iterable[str], None] = None,
+    var_names: Union[Iterable[str], None] = None,
     ) -> pd.DataFrame:
     """
     Compute feature vectors of each node in a network
@@ -2450,7 +2547,7 @@ def find_survival_variable(surv, X, reverse_response=False, return_table=True, r
 
 def get_reducer(data, save_dir, reducer_type='umap', n_components=2, 
                 n_neighbors=15, metric='euclidean', min_dist=0.0, 
-                save_reducer=False, random_state=0, verbose=1):
+                save_reducer=False, random_state=None, verbose=1):
     """
     Generate or load a dimensionality reduction (DR) model and transformed (reduced) data.
 
