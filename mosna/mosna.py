@@ -13,6 +13,7 @@ from copy import deepcopy
 from sklearn.utils import shuffle
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+from scipy.spatial import cKDTree
 from scipy import stats
 from scipy.stats import ttest_ind    # Welch's t-test
 from scipy.stats import mannwhitneyu # Mann-Whitney rank test
@@ -2715,6 +2716,184 @@ def get_clusterer(
         # save the iGraph object
         joblib.dump(G, str(file_path) + '_network.ig')
         return cluster_labels, cluster_dir, nb_clust, G
+
+
+def relabel_clusters(
+    clusters: np.array,
+) -> np.array:
+    """
+    Relabel the N clusters to have ids between 0 and N-1.
+
+    Parameters
+    ----------
+    clusters : np.array
+        Cluster labels.
+    
+    Returns
+    -------
+    new_clusters : np.array
+        Potentially relabelled clusters.
+    """
+    bins, counts = np.unique(clusters, return_counts=True)
+    if len(bins) == bins.max() - 1:
+        return clusters
+    else:
+        new_bins = np.arange(len(bins))
+        new_clusters = np.zeros_like(clusters)
+        for i in range(len(new_bins)):
+            new_clusters[clusters == bins[i]] = new_bins[i]
+        return new_clusters
+
+
+def merge_clusters(
+    clusters: np.array,
+    coords: np.ndarray,
+    size_thresh: Union[int, None] = None,
+    size_perc: int = 25,
+    ratio_size: float = 0.1,
+    n_neigh_max: int = 10,
+    force_merge: bool = False,
+    verbose: int = 1,
+) -> Tuple[np.array, bool]:
+    """
+    Merge the smallest cluster to it's closest cluster if its size
+    is lower than a given size.
+
+    Parameters
+    ----------
+    clusters : np.array
+        Cluster labels.
+    coords : np.ndarray
+        Coordinates of points in clusters.
+    size_thresh : Union[int, None], None
+        If provided, the size threshold to merge the smallest cluster.
+        If none, computed as the base size * ratio_size
+    size_perc : int, 25
+        Percentile of cluster size as the base size used for the size threshold.
+    ratio_size : float, 0.1
+        Ratio to compute size_thresh.
+    n_neigh_max : int, 10
+        Number of points to consider inside the cluster to merge for the closest neighbor.
+    force_merge : bool, False
+        If True, the smallest cluster is merged even if it is big enough.
+    verbose : int, 1
+        Verbosity level.
+    
+    Returns
+    -------
+    clusters : np.array
+        Potentially merged clusters.
+    merged : bool
+        Whether a merge occured.
+    """
+
+    merged = False
+    cluster_ids, cluster_sizes = np.unique(clusters, return_counts=True)
+    smallest_id = np.argmin(cluster_sizes)
+    if size_thresh is None:
+        size_thresh = np.percentile(cluster_sizes, size_perc) * ratio_size
+    if force_merge or cluster_sizes[smallest_id] < size_thresh:
+        select = clusters == cluster_ids[smallest_id]
+        coords_in = coords[select, :]
+        coords_out = coords[~select, :]
+        clusters_out = clusters[~select]
+        n_neigh_max = min(n_neigh_max, cluster_sizes[smallest_id])
+
+        kdt = cKDTree(coords_out)
+        # closest point id
+        dist, pairs = kdt.query(x=coords_in, k=1)
+
+        # Get the closest points to another cluster (avoid inner points)
+        closest_neigh_ids = np.argsort(dist)[:n_neigh_max]
+        closest_clusters = clusters_out[pairs][closest_neigh_ids]
+        val, counts = np.unique(closest_clusters, return_counts=True)
+        closest_cluster = val[np.argmax(counts)]
+        # make a copy of clusters
+        clusters = np.array(clusters)
+        clusters[select] = closest_cluster
+        if verbose:
+            print(f'cluster {cluster_ids[smallest_id]} merged with cluster {closest_cluster}')
+        merged = True
+    return clusters, merged
+
+
+def merge_clusters_until(
+    clusters: np.array,
+    coords: np.ndarray,
+    cond_n_clust: Union[int, None] = None,
+    force_n_clust: bool = False,
+    size_thresh: Union[int, None] = None,
+    size_perc: int = 25,
+    ratio_size: float = 0.1,
+    n_neigh_max: int = 10,
+    relabel_clusters_ids: bool = True,
+    verbose: int = 1,
+) -> np.array:
+    """
+    Merge iteratively the smallest cluster to it's closest cluster 
+    if its size is lower than a given size, until no further merging
+    occurs or until a condition is reached.
+
+    Parameters
+    ----------
+    clusters : np.array
+        Cluster labels.
+    coords : np.ndarray
+        Coordinates of points in clusters.
+    cond_n_clust: Union[int, None], None
+        Sufficient condition on the number of clusters below which the iterative
+        merge stops.
+    force_n_clust : bool, False
+        If True, force merging until the desired number of clusters is reached.
+        It overides the 'until no further merging occurs' condition.
+    size_thresh : Union[int, None], None
+        If provided, the size threshold to merge the smallest cluster.
+        If none, computed as the base size * ratio_size
+    size_perc : int, 25
+        Percentile of cluster size as the base size used for the size threshold.
+    ratio_size : float, 0.1
+        Ratio to compute size_thresh.
+    n_neigh_max : int, 10
+        Number of points to consider inside the cluster to merge for the closest neighbor.
+    relabel_clusters_ids : bool, True
+        If True, relabel N clusters between 0 and N-1.
+    verbose : int, 1
+        Verbosity level.
+    
+    Returns
+    -------
+    clusters : np.array
+        Potentially merged clusters.
+    """
+
+    keep_merging = True
+    while keep_merging:
+        clusters, merged = merge_clusters(
+            clusters=clusters,
+            coords=coords,
+            size_thresh=size_thresh,
+            size_perc=size_perc,
+            ratio_size=ratio_size,
+            n_neigh_max=n_neigh_max,
+            force_merge=force_n_clust,
+            verbose=verbose,
+        )
+
+        if not merged and not force_n_clust:
+            keep_merging = False
+            if verbose > 0:
+                print('no further merging can occur')
+        else:
+            bins = np.unique(clusters)
+            if cond_n_clust is not None and len(bins) <= cond_n_clust:
+                keep_merging = False
+                if verbose > 0:
+                    print(f'maximum number of clusters {cond_n_clust} reached')
+    if relabel_clusters_ids:
+        clusters = relabel_clusters(clusters)
+    return clusters
+
+
 
 
 def plot_clusters(embed_viz, 
