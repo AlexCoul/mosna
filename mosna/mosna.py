@@ -2546,7 +2546,7 @@ def find_survival_variable(surv, X, reverse_response=False, return_table=True, r
 
 
 def get_reducer(data, save_dir, reducer_type='umap', n_components=2, 
-                n_neighbors=15, metric='euclidean', min_dist=0.0, 
+                n_neighbors=15, metric='manhattan', min_dist=0.0, 
                 save_reducer=False, random_state=None, verbose=1):
     """
     Generate or load a dimensionality reduction (DR) model and transformed (reduced) data.
@@ -2564,7 +2564,7 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
     n-neighbors : int
         Number of closest neighbors used in various DR methods.
     metric : str
-        Type of distance used.
+        Type of distance used, like 'manhattan', 'euclidean' or 'cosine'.
     min_dist : float
         Minimum distance between DRed data, we usually want 0.
     save_reducer : bool
@@ -2616,9 +2616,20 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
     return embedding, reducer
 
 
-def get_clusterer(data, save_dir, reducer_type='umap', n_neighbors=15, metric='euclidean', min_dist=0.0,
-                  clusterer_type='leiden', dim_clust=2, k_cluster=15, resolution_parameter=0.005,
-                  force_recompute=False, verbose=1):
+def get_clusterer(
+        data,
+        save_dir,
+        reducer_type='umap', 
+        n_neighbors=15, 
+        metric='manhattan', 
+        min_dist=0.0,
+        clusterer_type='leiden', 
+        dim_clust=2, 
+        k_cluster=15, 
+        resolution_parameter=0.005,
+        force_recompute=False, 
+        verbose=1,
+        ):
     """
     Generate or load a clustering model and cluster labels.
 
