@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
+import anndata as ad
 import os
 from pathlib import Path
 from time import time
@@ -1156,13 +1157,116 @@ def make_features_NAS(X, pairs, order=1, var_names=None, stat_funcs='default', s
     return nas
 
 
-def compute_NAS_single_network(
-    net_dir: Union[str, Path], 
-    data_info: List[str],
-    extension: str,
-    read_fct: Callable,
-    id_level_1: str,
+def make_features_STAGATE(
+    X: np.array, 
+    pairs: np.array, 
+    var_names: Union[Iterable[str], None] = None,
+    ) -> pd.DataFrame:
+    """
+    Compute feature vectors of each node in a network
+    given the STAGATE method.
+
+    Parameters
+    ----------
+    X : array_like
+        Nodes' attributes on which features are computed.
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    var_names : list
+        Names of variables of X.
+
+    Returns
+    -------
+    feats : dataframe
+        Features computed with the STAGATE method.
+    """
+    # code here
+    pass
+
+
+def make_features_SCANIT(
+    X: np.array = None, 
+    coords: np.array = None, 
+    pairs: np.array = None, 
+    adata: ad.AnnData = None,
+    var_names: Union[Iterable[str], None] = None,
+    spatial_graph_kwargs: Union[dict, None] = None,
+    spatial_representation: Union[dict, None] = None,
+    return_anndata: bool = False,
+    ) -> pd.DataFrame:
+    """
+    Compute feature vectors of each node in a network
+    given the SCAN-IT method.
+
+    Parameters
+    ----------
+    X : array_like
+        Nodes' attributes on which features are computed.
+    coords : array_like
+        Coordinates of cells.
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    var_names : list
+        Names of variables of X.
+
+    Returns
+    -------
+    feats : dataframe
+        Features computed with the SCAN-IT method.
+    """
+    import scanit
+
+    if adata is None:
+        adata = ty.add_to_AnnData(
+            coords, 
+            pairs, 
+            adata=None,
+            counts=X,
+            obs_names=None,
+            var_names=var_names,
+            return_adata=True,
+            )
+
+    # make a sparse matrix in adata.obsp['scanit-graph']
+    if spatial_graph_kwargs is None:
+        spatial_graph_kwargs = {
+            'method': 'alpha shape', 
+            'alpha_n_layer': 2, 
+            'knn_n_neighbors': 5,
+        }
+    scanit.tl.spatial_graph(adata, **spatial_graph_kwargs)
+    # make a N x n_h feature matrix in adata.obsm['X_scanit']
+    if spatial_representation is None:
+        spatial_representation = {
+            'n_h': 30,
+            'n_epoch': 2000, 
+            'lr': 0.001, 
+            'device': 'cuda', 
+            'n_consensus': 1, 
+            'projection': 'mds', 
+            'python_seed': 0, 
+            'torch_seed': 0, 
+            'numpy_seed': 0,
+        }
+    scanit.tl.spatial_representation(adata, **spatial_representation)
+    
+    if return_anndata:
+        return adata
+    else:
+        colnames = [f'scanit_{i}' for i in range(adata.obsm['X_scanit'].shape[1])]
+        scanit_features = pd.DataFrame(adata.obsm['X_scanit'], columns=colnames)
+        return scanit_features
+
+
+def compute_spatial_omic_features_single_network(
+    method: str = 'NAS',
+    net_dir: Union[str, Path] = None, 
+    data_info: List[str] = None,
+    extension: str = None,
+    read_fct: Callable = None,
+    id_level_1: str = None,
     id_level_2: Union[str, None] = None, 
+    col_coords: Union[Iterable, None] = None,
     attributes_col: Union[Iterable, None] = None,
     use_attributes: Union[Iterable, None] = None, 
     make_onehot: bool = False,
@@ -1176,25 +1280,31 @@ def compute_NAS_single_network(
     verbose: int = 1,
     ) -> pd.DataFrame:
     """
-    Compute the Neighbors Aggregation Statistics for a single network.
+    Compute the spatial omic features for a single network.
 
     Parameters
     ----------
-    net_dir : Union[str, Path]
+    method : str = 'NAS'
+        Method used to compute features from spatial omic data.
+        Currently implemented methods are 'NAS' for the Neighbors 
+        Aggregation Statistics and 'SCAN-IT'.
+    net_dir : Union[str, Path], None
         Directory where network files are stored.
-    data_info : List[str, str]
+    data_info : List[str, str], None
         Identifier IDs of sample, e.g. patient id and sample id.
-    extension : str
+    extension : str, None
         File format of network files.
-    read_fct : Callable
+    read_fct : Callable, None
         Function used to load network files.
-    id_level_1 : str
+    id_level_1 : str, None
         Identifier of the first level of the dataset, like
         'patient' or 'chromosome'.
     id_level_2 : Union[str, None], None
         Identifier of the second level of the dataset, like 
         'sample' or 'locus'.
-    attributes_col : Union[Iterable, None]
+    col_coords : Union[Iterable, None], None
+        Coordinate columns if needed by the spatial omic method.
+    attributes_col : Union[Iterable, None], None
         Unique columns storing attributes, like cell types, or
         list of columns used to aggregate variables. 
         If None, all columns are used.
@@ -1224,9 +1334,10 @@ def compute_NAS_single_network(
     
     Returns
     -------
-    nas : pd.DataFrame
-        Table of Neighbors Aggregated Statistics.
+    feats : pd.DataFrame
+        Table of spatial omic features.
     """
+    assert method in ['NAS', 'SCAN-IT']
 
     # load nodes and edges of a specific group
     if len(data_info) == 1:
@@ -1257,30 +1368,41 @@ def compute_NAS_single_network(
         for col in missing_cols:
             nodes[col] = 0
     
-    # compute Neighbors Aggregation Statistics
-    nas = make_features_NAS(
-        nodes[use_attributes].astype(float).values, 
-        edges.values, 
-        order=order, 
-        var_names=use_attributes, 
-        stat_funcs=stat_funcs, 
-        stat_names=stat_names, 
-        var_sep=var_sep)
+    if method == 'NAS':
+        # compute Neighbors Aggregation Statistics
+        feats = make_features_NAS(
+            X=nodes[use_attributes].astype(float).values, 
+            pairs=edges.values, 
+            order=order, 
+            var_names=use_attributes, 
+            stat_funcs=stat_funcs, 
+            stat_names=stat_names, 
+            var_sep=var_sep)
+    elif method == 'SCAN-IT':
+        if col_coords is None:
+            col_coords = ['y', 'x']
+        feats = make_features_SCANIT(
+            X=nodes[use_attributes].astype(float).values, 
+            pairs=edges.values, 
+            coords=nodes[col_coords].values, 
+            var_names=use_attributes, 
+            )
     if add_sample_info:
-        nas[id_level_1] = data_info[0]
-        nas[id_level_2] = data_info[1]
+        feats[id_level_1] = data_info[0]
+        feats[id_level_2] = data_info[1]
     
     if save_intermediate_results:
         if dir_save_interm is None:
             dir_save_interm = net_dir / '.temp'
         dir_save_interm.mkdir(parents=True, exist_ok=True)
-        nas.to_parquet(dir_save_interm / f'nas_{str_group}.parquet', index=False)
+        feats.to_parquet(dir_save_interm / f'{method}_{str_group}.parquet', index=False)
     
-    return nas
+    return feats
 
 
-def compute_NAS_all_networks(
-    net_dir: Union[str, Path],  
+def compute_spatial_omic_features_all_networks(
+    method: str = 'NAS',
+    net_dir: Union[str, Path] = None,  
     attributes_col: Union[str, Iterable, None] = None,
     use_attributes: Union[Iterable, None] = None,  
     make_onehot: bool = False,
@@ -1299,12 +1421,16 @@ def compute_NAS_all_networks(
     verbose: int = 1,
     ) -> pd.DataFrame:
     """
-    Compute the Neighbors Aggregation Statistics for all
+    Compute the spatial omic features for all
     samples in a batch, cohort or other kind of groups.
 
     Parameters
     ----------
-    net_dir : Union[str, Path]
+    method : str = 'NAS'
+        Method used to compute features from spatial omic data.
+        Currently implemented methods are 'NAS' for the Neighbors 
+        Aggregation Statistics and 'SCAN-IT'.
+    net_dir : Union[str, Path], None
         Directory where network files are stored.
     attributes_col : Union[str, Iterable, None], None
         Unique columns storing attributes, like cell types, or
@@ -1372,8 +1498,9 @@ def compute_NAS_all_networks(
     groups_data = []
     
     # redefine defaults values of the network analysis function
-    use_compute_NAS_single_network = partial(
-        compute_NAS_single_network,
+    use_compute_sof_single_network = partial(
+        compute_spatial_omic_features_single_network,
+        method=method,
         net_dir=net_dir,
         extension=extension,
         read_fct=read_fct,
@@ -1396,7 +1523,7 @@ def compute_NAS_all_networks(
         else:
             iterable = data_index
         for data_info in iterable:
-            group_data = use_compute_NAS_single_network(data_info=data_info)
+            group_data = use_compute_sof_single_network(data_info=data_info)
             groups_data.append(group_data)
         nas = pd.concat(groups_data, axis=0)
     else:
@@ -1427,13 +1554,14 @@ def compute_NAS_all_networks(
                 # TODO: add dask's progressbar
                 for data_info in data_index:
                     # select nodes and edges of a specific group
-                    group_data = delayed(use_compute_NAS_single_network)(data_info=data_info)
+                    group_data = delayed(use_compute_sof_single_network)(data_info=data_info)
                     groups_data.append(group_data)
                 # evaluate the parallel computation
                 # ProgressBar().register()
                 nas = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
 
     return nas
+
 
 
 def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_sizes, processed_dir, soft_clustering=True, 
@@ -1786,33 +1914,6 @@ def plot_screened_parameters(obj, cell_pos_cols, cell_type_col, orders, dim_clus
                             fig.savefig(save_dir / suptitle, bbox_inches='tight', facecolor='white', dpi=200)
                             plt.show(block=False)
                             plt.close()
-
-
-def make_features_STARGATE(
-    X: np.array, 
-    pairs: np.array, 
-    var_names: Union[Iterable[str], None] = None,
-    ) -> pd.DataFrame:
-    """
-    Compute feature vectors of each node in a network
-    given the STARGATE method.
-
-    Parameters
-    ----------
-    X : array_like
-        Nodes' attributes on which features are computed.
-    pairs : array_like
-        Pairs of nodes' id that define the network's edges.
-    var_names : list
-        Names of variables of X.
-
-    Returns
-    -------
-    feats : dataframe
-        Features computed with the STARGATE method.
-    """
-    # code here
-    pass
 
 
 def make_cluster_cmap(labels, grey_pos='end', saturated_first=True, as_mpl_cmap=False):
