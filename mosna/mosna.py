@@ -545,7 +545,7 @@ def sample_assort_mixmat(nodes, edges, attributes, sample_id=None ,n_shuffle=50,
     col_sample = (['id', '# total'] +
                  ['% ' + x for x in attributes] +
                  ['assort', 'assort MEAN', 'assort STD', 'assort Z'] +
-                 attributes_pairs(attributes, prefix='', medfix=' - ', suffix='') +
+                 attributes_pairs(attributes, prefix='', medfix=' - ', suffix=' RAW') +
                  attributes_pairs(attributes, prefix='', medfix=' - ', suffix=' MEAN') +
                  attributes_pairs(attributes, prefix='', medfix=' - ', suffix=' STD') +
                  attributes_pairs(attributes, prefix='', medfix=' - ', suffix=' Z'))
