@@ -1967,13 +1967,16 @@ def make_cluster_cmap(labels, grey_pos='end', saturated_first=True, as_mpl_cmap=
 
 def make_niches_composition(var, niches, var_label='variable', normalize='total'):
     """
-    Make a matrix plot of cell types composition of niches.
+    Make a counts matrix of cell types composition of niches.
     """
     df = pd.DataFrame({var_label: var,
                        'niches': niches})
     df['counts'] = np.arange(df.shape[0])
     counts = df.groupby([var_label, 'niches']).count()
-    counts = counts.reset_index().pivot(var_label, 'niches', 'counts').fillna(0)
+    counts = counts.reset_index().pivot(
+        index=var_label, 
+        columns='niches', 
+        values='counts').fillna(0)
     if normalize == 'total':
         counts = counts / df.shape[0]
     elif normalize == 'obs':
@@ -1988,6 +1991,9 @@ def make_niches_composition(var, niches, var_label='variable', normalize='total'
         # CLR tranformation
         X_clr = cs.clr(cs.closure(X))
         counts.loc[:, :] = X_clr
+    elif normalize == 'niche&obs':
+        counts = counts.div(counts.sum(axis=1), axis=0)
+        counts = counts / counts.sum(axis=0)
     
     return counts
 
