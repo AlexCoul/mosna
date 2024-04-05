@@ -49,6 +49,7 @@ try:
     from cuml import UMAP
 except:
     from umap import UMAP
+from pycave.bayes import GaussianMixture
 
 
 
