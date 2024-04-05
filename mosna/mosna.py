@@ -2054,6 +2054,8 @@ def clean_data(
     select : If method == 'drop', returns also a boolean vector
         to apply on potential other objects like survival data.
     """
+    if data.values.dtype != 'float':
+        data = data.astype(float)
     to_nan = ~np.isfinite(data.values)
     nb_nan = to_nan.sum()
     if nb_nan != 0:
@@ -2739,7 +2741,10 @@ def get_clusterer(
         dim_clust=2, 
         k_cluster=15, 
         resolution_parameter=0.005,
+        n_clusters=None,
+        flavor=None,
         force_recompute=False, 
+        use_gpu=True,
         verbose=1,
         ):
     """
@@ -2770,8 +2775,15 @@ def get_clusterer(
         Number of neighbors considered during the clustering.
     resolution_parameter : float
         Level of details of the clustering. A higher number increases the level of details.
+    n_clusters : int, None
+        Number of target clusters, used with GaussianMixtureModel clusterer.
+    flavor : str, None
+        If 'CellCharter', uses UMAP for dimensionality reduction, and a gaussian mixture
+        model for clustering. 
     force_recompute : bool
         Whether computation occurs even if results already exist in `save_dir`.
+    use_gpu : boo
+        If True, GMM clustering leverages GPU.
     
     Returns
     -------
@@ -2787,29 +2799,46 @@ def get_clusterer(
     >>> cluster_labels, cluster_dir, nb_clust, G = get_clusterer(data, "test")
     """
 
+    if flavor is not None:
+        if flavor == 'UTAG':
+            print('not implemented yet')
+        elif flavor == 'CellCharter':
+            reducer_type = 'umap'
+            clusterer_type = 'gmm'
+            if n_clusters is None:
+                n_clusters = 10
     reducer_name = f"reducer-{reducer_type}_dim-{dim_clust}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
     reducer_dir = Path(save_dir) / reducer_name
-    cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
-    cluster_dir.mkdir(parents=True, exist_ok=True)
 
     if clusterer_type == "leiden":
+        cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
         clusterer_name = f"partition-{'RBConfigurationVertexPartition'}_resolution-{resolution_parameter}"
+    elif clusterer_type == "gmm":
+        cluster_dir = reducer_dir / f"clusterer-{clusterer_type}"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        clusterer_name = f"gmm_n_clusters-{n_clusters}"
     file_path = cluster_dir / clusterer_name
 
     if os.path.exists(str(file_path) + '_labels.npy') and not force_recompute:
-        if verbose > 0: print("Loading clusterer object and cluster labels")
+        if verbose > 0: 
+            print("Loading clusterer object and cluster labels")
         cluster_labels = np.load(str(file_path) + '_labels.npy')
         if clusterer_type == "leiden":
             G = joblib.load(str(file_path) + '_network.ig')
         #     partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
         #     # extract labels from partition
         #     cluster_labels = np.array(partition.membership)
+        elif clusterer_type == "gmm":
+            estimator = joblib.load(str(file_path) + '_estimator.joblib')
         nb_clust = cluster_labels.max()
         if verbose > 0: print(f"There are {nb_clust} clusters")
     else:
-        if verbose > 0: print("Performing clustering")
         # get the embedding of data
         embedding, _ = get_reducer(data, save_dir, reducer_type, dim_clust, n_neighbors, metric, min_dist, verbose=verbose)
+        if verbose > 0: 
+            print("Performing clustering")
+
         if clusterer_type == "leiden":
             # build knn graph
             embedding_pairs = ty.build_knn(embedding, k=k_cluster)
@@ -2819,14 +2848,29 @@ def get_clusterer(
             partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
             # partition = la.find_partition(G, la.RBERVertexPartition, resolution_parameter=resolution_parameter)
             cluster_labels = np.array(partition.membership)
+
+        elif clusterer_type == "gmm":
+            if use_gpu:
+                estimator = GaussianMixture(n_clusters, trainer_params=dict(accelerator='gpu', devices=1))
+            else:
+                estimator = GaussianMixture(n_clusters)
+            # make cluster predictions
+            estimator.fit(embedding.astype(np.float32))
+            cluster_labels = np.array(estimator.predict(embedding.astype(np.float32)))
+
         nb_clust = cluster_labels.max()
-        if verbose > 0: print(f"Found {nb_clust} clusters")
+        if verbose > 0: 
+            print(f"Found {nb_clust} clusters")
         # save cluster labels
         np.save(str(file_path) + '_labels.npy', cluster_labels, allow_pickle=False, fix_imports=False)
     if clusterer_type == "leiden":
         # save the iGraph object
         joblib.dump(G, str(file_path) + '_network.ig')
         return cluster_labels, cluster_dir, nb_clust, G
+    # elif clusterer_type == "gmm":
+    #     joblib.dump(estimator, str(file_path) + '_estimator.joblib')
+    else:
+        return cluster_labels, cluster_dir, nb_clust, estimator
 
 
 def relabel_clusters(
