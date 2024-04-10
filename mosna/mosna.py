@@ -1404,6 +1404,8 @@ def compute_spatial_omic_features_single_network(
 def compute_spatial_omic_features_all_networks(
     method: str = 'NAS',
     net_dir: Union[str, Path] = None,  
+    nodes_dir: Union[str, Path] = None,  
+    edges_dir: Union[str, Path] = None,  
     attributes_col: Union[str, Iterable, None] = None,
     use_attributes: Union[Iterable, None] = None,  
     make_onehot: bool = False,
@@ -1467,7 +1469,15 @@ def compute_spatial_omic_features_all_networks(
         Table of Neighbors Aggregated Statistics.
     """
 
-    net_dir = Path(net_dir)
+    if net_dir is not None:
+        net_dir = Path(net_dir)
+        if nodes_dir is None:
+            nodes_dir = net_dir
+        if edges_dir is None:
+            edges_dir = net_dir
+    nodes_dir = Path(nodes_dir)
+    edges_dir = Path(edges_dir)
+        
     data_single_level = id_level_2 is None
     
     if isinstance(attributes_col, str):
@@ -1483,7 +1493,7 @@ def compute_spatial_omic_features_all_networks(
         len_ext = len(extension) + 1
         len_l1 = len(id_level_1) + 1
         len_l2 = len(id_level_2) + 1
-        files = net_dir.glob(f'edges_*.{extension}')
+        files = edges_dir.glob(f'edges_*.{extension}')
         if not data_single_level:
             for file in files:
                 # print(file)
@@ -2221,7 +2231,7 @@ def extract_X_y(data, y_name, y_values=None, col_names=None, col_exclude=None, b
     return X, y
 
 
-def make_composed_variables(data, use_col=None, method='ratio', order=2):
+def make_composed_variables(data, use_col=None, method='proportion', order=2):
     """
     Create derived or composed variables from simpler ones.  
     When producing ratios of variables, ratios of identical variables and
@@ -2247,7 +2257,15 @@ def make_composed_variables(data, use_col=None, method='ratio', order=2):
     
     if use_col is None:
         use_col = data.columns
-    if method == 'ratio':
+    if method == 'proportion':
+        # ratio of variables
+        new_vars = {}
+        for i, var_1 in enumerate(use_col):
+            for var_2 in use_col[i+1:]:
+                new_var_name = f"{var_1} / ( {var_1} + {var_2} )"
+                new_vars[new_var_name] = data[var_1] / (data[var_1] + data[var_2])
+        new_data = pd.DataFrame(data=new_vars)
+    elif method == 'ratio':
         # ratio of variables
         new_vars = {}
         for i, var_1 in enumerate(use_col):
@@ -2269,6 +2287,7 @@ def make_composed_variables(data, use_col=None, method='ratio', order=2):
                             new_vars[new_var_name] = (data[var_1] / data[var_2]) / (data[var_3] / data[var_4])
             next_data = pd.DataFrame(data=new_vars)
             new_data = pd.concat([new_data, next_data], axis=1)
+
 
     return new_data
 
