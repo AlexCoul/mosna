@@ -3751,6 +3751,8 @@ def logistic_regression(
     cv_adapt=True, 
     cv_max=10, 
     l1_ratios_list='auto', 
+    split_train_test=True,
+    test_size=0.25,
     dir_save=None,
     plot_coefs=True,
     save_coefs=False,
@@ -3814,8 +3816,11 @@ def logistic_regression(
     for col in col_drop:
         if col in X.columns:
             X.drop(columns=col, inplace=True)
-    X = X.loc[(X.loc[:, y_name] == 1) | (X.loc[:, y_name] == 2), :]
-    y = X[y_name].values - 1  # to have resp=0, non-resp=1
+    # # select groups
+    # X = X.loc[(X.loc[:, y_name] == 1) | (X.loc[:, y_name] == 2), :]
+    # y = X[y_name].values - 1  # to have resp=0, non-resp=1
+    # handled differently now: 1=resp, 0=non-resp
+    y = X[y_name].values
     X = X.drop(columns=[y_name])
     var_idx = X.columns
     # X = X.values
@@ -3825,15 +3830,20 @@ def logistic_regression(
     models = {}
     for l1_name, l1_ratios in l1_ratios_list:
 
-        score_split = {}
-        # stratify train / test by response
-        np.random.seed(0)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, 
-            test_size=0.25, 
-            random_state=0, 
-            shuffle=True, 
-        )
+        if split_train_test:
+            # stratify train / test by response
+            np.random.seed(0)
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, 
+                test_size=test_size, 
+                random_state=0, 
+                shuffle=True, 
+            )
+        else:
+            X_train = X
+            X_test = X
+            y_train = y
+            y_test = y
         # Standardize data to give same weight to regularization
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
