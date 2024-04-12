@@ -31,7 +31,7 @@ setup(
                       'igraph', 'leidenalg', 'openpyxl', 'odfpy',
                       'fastcluster', 'lifelines', 'hdbscan', 'umap-learn',
                       'dask', 'xgboost', 'gudhi', 'torch_geometric',
-                      'torch_sparse', 'pycave',
+                      'torch_sparse', 'scanorama', 'pycave',
                       'scanit @ git+https://github.com/zcang/SCAN-IT.git',
                      ],
     keywords = 'spatial networks cells transcriptomics sociology econometrics'

@@ -3318,9 +3318,8 @@ def get_clusterer(
         # save the iGraph object
         joblib.dump(G, str(file_path) + '_network.ig')
         return cluster_labels, cluster_dir, nb_clust, G
-    # elif clusterer_type == "gmm":
-    #     joblib.dump(estimator, str(file_path) + '_estimator.joblib')
-    else:
+    elif clusterer_type == "gmm":
+        joblib.dump(estimator, str(file_path) + '_estimator.joblib')
         return cluster_labels, cluster_dir, nb_clust, estimator
 
 
