@@ -3111,7 +3111,7 @@ def find_survival_variable(surv, X, reverse_response=False, return_table=True, r
 
 
 def get_reducer(data, save_dir, reducer_type='umap', n_components=2, 
-                n_neighbors=15, metric='manhattan', min_dist=0.0, 
+                n_neighbors=15, metric='manhattan', min_dist=0.0, force_recompute=False, 
                 save_reducer=False, random_state=None, verbose=1):
     """
     Generate or load a dimensionality reduction (DR) model and transformed (reduced) data.
@@ -3153,7 +3153,7 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
     reducer_name = f"reducer-{reducer_type}_dim-{n_components}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
     save_dir = Path(save_dir) / reducer_name
     file_path = save_dir / "embedding"
-    if os.path.exists(str(file_path) + '.npy'):
+    if os.path.exists(str(file_path) + '.npy') and not force_recompute:
         if verbose > 0: print("Loading reducer object and reduced coordinates")
         embedding = np.load(str(file_path) + '.npy')
         if os.path.exists(str(save_dir / "reducer") + '.pkl'):
@@ -3170,7 +3170,10 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
                 metric=metric,
                 min_dist=min_dist,
                 )
-        embedding = reducer.fit_transform(data)
+        if isinstance(data, pd.DataFrame):
+            embedding = reducer.fit_transform(data.values)
+        else:
+            embedding = reducer.fit_transform(data)
         # save reduced coordinates
         save_dir.mkdir(parents=True, exist_ok=True)
         np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
@@ -3196,6 +3199,7 @@ def get_clusterer(
         flavor=None,
         force_recompute=False, 
         use_gpu=True,
+        random_state=None,
         verbose=1,
         ):
     """
@@ -3286,7 +3290,7 @@ def get_clusterer(
         if verbose > 0: print(f"There are {nb_clust} clusters")
     else:
         # get the embedding of data
-        embedding, _ = get_reducer(data, save_dir, reducer_type, dim_clust, n_neighbors, metric, min_dist, verbose=verbose)
+        embedding, _ = get_reducer(data, save_dir, reducer_type, dim_clust, n_neighbors, metric, min_dist, random_state=random_state, verbose=verbose)
         if verbose > 0: 
             print("Performing clustering")
 
