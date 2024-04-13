@@ -3761,6 +3761,7 @@ def logistic_regression(
     save_coefs=False,
     save_scores=False,
     save_plot_figures=False,
+    str_prefix='',
     figsize=(8, 8),
     verbose=1,
     ):
@@ -3914,9 +3915,9 @@ def logistic_regression(
                 ax.set_xticklabels(labels, rotation=45, ha='right');
                 ax.set_xlabel('variables')
                 ax.set_ylabel('coef')
-                ax.set_title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']}")
+                ax.set_title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']:.3f}")
                 if save_plot_figures:
-                    fig.savefig(dir_save / f"coef.png", bbox_inches='tight', facecolor='white')
+                    fig.savefig(dir_save / f"{str_prefix}logistic_regression_coefficients_grid-{l1_name}.jpg", bbox_inches='tight', facecolor='white', dpi=150)
 
         else:
             score = {
