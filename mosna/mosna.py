@@ -33,7 +33,6 @@ import sklearn.metrics as metrics
 import hdbscan
 import composition_stats as cs
 import igraph as ig
-import leidenalg as la
 import scanorama
 import colorcet as cc
 import re
@@ -50,6 +49,13 @@ try:
     from cuml import UMAP
 except:
     from umap import UMAP
+try:
+    import cugraph
+    import cudf
+    gpu_clustering = True
+except:
+    import leidenalg as la
+    gpu_clustering = False
 from pycave.bayes import GaussianMixture
 
 
@@ -3194,12 +3200,15 @@ def get_clusterer(
         clusterer_type='leiden', 
         dim_clust=2, 
         k_cluster=15, 
-        resolution_parameter=0.005,
+        resolution=0.005,
         n_clusters=None,
+        ecg_min_weight=0.05, 
+        ecg_ensemble_size=20,
         flavor=None,
         force_recompute=False, 
         use_gpu=True,
         random_state=None,
+        save_net_data=True,
         verbose=1,
         ):
     """
@@ -3222,16 +3231,22 @@ def get_clusterer(
     min_dist : float
         Minimum distance between DRed data, we usually want 0.
     clusterer_type : str
-        Clustering algorithm to partition data.
+        Clustering algorithm to partition data, either 'leiden', 'ecg' for Ensemble 
+        Clustering for Graphs, 'spectral' for balanced spectral clustering or 'gmm' 
+        for Gaussian Mixture Model.
     dim_clust : int
         Dimensionality of the reducede space in which data is clustered.
         A higher number allows for more complex cluster shapes, but introduces outliers.
     k_cluster : int
         Number of neighbors considered during the clustering.
-    resolution_parameter : float
+    resolution : float
         Level of details of the clustering. A higher number increases the level of details.
     n_clusters : int, None
         Number of target clusters, used with GaussianMixtureModel clusterer.
+    ecg_min_weight : float, 0.05
+        min_weight parameter for the ecg method.
+    ecg_ensemble_size : int, 20
+        ensemble_size parameter for the ecg method.
     flavor : str, None
         If 'CellCharter', uses UMAP for dimensionality reduction, and a gaussian mixture
         model for clustering. 
@@ -3268,41 +3283,122 @@ def get_clusterer(
     if clusterer_type == "leiden":
         cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
         cluster_dir.mkdir(parents=True, exist_ok=True)
-        clusterer_name = f"partition-{'RBConfigurationVertexPartition'}_resolution-{resolution_parameter}"
+        clusterer_name = f"leiden_resolution-{resolution}"
+        # knn network in reduced space, common to several clustering methods:
+        reduced_net_path = reducer_dir / f'edges_n_neighbors-{k_cluster}.parquet'
+    elif clusterer_type == "ecg":
+        cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        clusterer_name = f"ecg_min_weight-{ecg_min_weight}_ensemble_size-{ecg_ensemble_size}"
+        reduced_net_path = reducer_dir / f'edges_n_neighbors-{k_cluster}.parquet'
+    elif clusterer_type == "spectral":
+        assert n_clusters is not None
+        cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        clusterer_name = f"spectral_n_clusters-{n_clusters}"
+        reduced_net_path = reducer_dir / f'edges_n_neighbors-{k_cluster}.parquet'
     elif clusterer_type == "gmm":
+        assert n_clusters is not None
         cluster_dir = reducer_dir / f"clusterer-{clusterer_type}"
         cluster_dir.mkdir(parents=True, exist_ok=True)
         clusterer_name = f"gmm_n_clusters-{n_clusters}"
     file_path = cluster_dir / clusterer_name
 
     if os.path.exists(str(file_path) + '_labels.npy') and not force_recompute:
+        # load clustered data
         if verbose > 0: 
             print("Loading clusterer object and cluster labels")
         cluster_labels = np.load(str(file_path) + '_labels.npy')
-        if clusterer_type == "leiden":
-            G = joblib.load(str(file_path) + '_network.ig')
-        #     partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
-        #     # extract labels from partition
-        #     cluster_labels = np.array(partition.membership)
+        nb_clust = len(np.unique(cluster_labels))
+        if verbose > 0: 
+            print(f"There are {nb_clust} clusters")
+        
+        # load estimator or network data for return
+        if clusterer_type in ['leiden', 'ecg', 'spectral']:
+            if gpu_clustering:
+                edges = cudf.read_parquet(reduced_net_path)
+            else:
+                edges = pd.read_parquet(reduced_net_path)
         elif clusterer_type == "gmm":
             estimator = joblib.load(str(file_path) + '_estimator.joblib')
-        nb_clust = cluster_labels.max()
-        if verbose > 0: print(f"There are {nb_clust} clusters")
+        save_net_data = False
     else:
         # get the embedding of data
-        embedding, _ = get_reducer(data, save_dir, reducer_type, dim_clust, n_neighbors, metric, min_dist, random_state=random_state, verbose=verbose)
+        embedding, _ = get_reducer(
+            data, save_dir, reducer_type, dim_clust, n_neighbors, 
+            metric, min_dist, random_state=random_state, verbose=verbose)
         if verbose > 0: 
             print("Performing clustering")
 
-        if clusterer_type == "leiden":
-            # build knn graph
-            embedding_pairs = ty.build_knn(embedding, k=k_cluster)
-            # convert into iGraph object
-            G = ty.to_iGraph(embedding, embedding_pairs)
-            # perform clustering
-            partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution_parameter, seed=0)
-            # partition = la.find_partition(G, la.RBERVertexPartition, resolution_parameter=resolution_parameter)
-            cluster_labels = np.array(partition.membership)
+        if clusterer_type in ['leiden', 'ecg', 'spectral']:
+            if reduced_net_path.exists():
+                if verbose > 1:
+                    print('loading knn graph')
+                if gpu_clustering:
+                    edges = cudf.read_parquet(reduced_net_path)
+                    # send edges to GPU, with dummy weights
+                    G = cugraph.Graph()
+                    G.from_cudf_edgelist(
+                        edges, 
+                        source='src', 
+                        destination='dst', 
+                        edge_attr='weight', 
+                        renumber=False,
+                        )
+                else:
+                    edges = pd.read_parquet(reduced_net_path)
+                    embedding_pairs = edges['src', 'dst'].values
+                    G = ty.to_iGraph(embedding, embedding_pairs)
+            else:
+                # need to build knn graph
+                if verbose > 1:
+                    print('building knn graph')
+                embedding_pairs = ty.build_knn(embedding, k=k_cluster)
+
+                if gpu_clustering:
+                    # send edges to GPU, with dummy weights
+                    edges_np = np.hstack((embedding_pairs, np.ones((len(embedding_pairs), 1)))).astype(np.int32)
+                    edges = cudf.DataFrame(edges_np, columns=['src', 'dst', 'weight'])
+                    G = cugraph.Graph()
+                    G.from_cudf_edgelist(
+                        edges, 
+                        source='src', 
+                        destination='dst', 
+                        edge_attr='weight', 
+                        renumber=False,
+                        )
+                else:
+                    edges_np = np.hstack((embedding_pairs, np.ones((len(embedding_pairs), 1)))).astype(np.int32)
+                    edges = pd.DataFrame(edges_np, columns=['src', 'dst', 'weight'])
+                    G = ty.to_iGraph(embedding, embedding_pairs)
+                    
+            if clusterer_type == "leiden":
+                if gpu_clustering:        
+                    partition, modularity_score = cugraph.leiden(G, max_iter=100, resolution=resolution)
+                    cluster_labels = partition['partition'].values
+                else:
+                    partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution=resolution, seed=0)
+                    # or other partition such as la.RBERVertexPartition
+                    cluster_labels = np.array(partition.membership)
+
+            elif clusterer_type == "ecg":
+                if gpu_clustering:
+                    partition = cugraph.ecg(G, min_weight=ecg_min_weight, ensemble_size=ecg_ensemble_size)
+                    cluster_labels = partition['partition'].values
+                else:
+                    raise RuntimeError('ecg clustering requires the cugraph library')
+
+            elif clusterer_type == "spectral":
+                if gpu_clustering:
+                    partition = cugraph.spectralBalancedCutClustering(G, n_clusters)
+                    cluster_labels = partition['cluster'].values
+                else:
+                    from sklearn.cluster import SpectralClustering
+                    cluster_labels = SpectralClustering(
+                        n_clusters=n_clusters, 
+                        assign_labels='discretize', 
+                        random_state=0,
+                        ).fit_predict(embedding)
 
         elif clusterer_type == "gmm":
             if use_gpu:
@@ -3313,17 +3409,18 @@ def get_clusterer(
             estimator.fit(embedding.astype(np.float32))
             cluster_labels = np.array(estimator.predict(embedding.astype(np.float32)))
 
-        nb_clust = cluster_labels.max()
+        nb_clust = len(np.unique(cluster_labels))
         if verbose > 0: 
             print(f"Found {nb_clust} clusters")
         # save cluster labels
-        np.save(str(file_path) + '_labels.npy', cluster_labels, allow_pickle=False, fix_imports=False)
-    if clusterer_type == "leiden":
-        # save the iGraph object
-        joblib.dump(G, str(file_path) + '_network.ig')
-        return cluster_labels, cluster_dir, nb_clust, G
+        np.save(str(file_path) + '_labels.npy', cluster_labels, allow_pickle=False)
+    if clusterer_type in ["leiden", "ecg", "spectral"]:
+        if save_net_data:
+            edges.to_parquet(reduced_net_path)
+        return cluster_labels, cluster_dir, nb_clust, edges
     elif clusterer_type == "gmm":
-        joblib.dump(estimator, str(file_path) + '_estimator.joblib')
+        if save_net_data:
+            joblib.dump(estimator, str(file_path) + '_estimator.joblib')
         return cluster_labels, cluster_dir, nb_clust, estimator
 
 
