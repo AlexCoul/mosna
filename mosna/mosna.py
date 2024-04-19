@@ -23,6 +23,7 @@ from statsmodels.stats.multitest import fdrcorrection
 import statsmodels.api as sm
 from lifelines import KaplanMeierFitter
 from lifelines.statistics import logrank_test
+from lifelines.utils import inv_normal_cdf
 import warnings
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import StandardScaler
@@ -68,6 +69,14 @@ def to_numpy(data):
         # cupy is available
         if isinstance(data, cp.ndarray):
             data = cp.asnumpy(data)
+    return data
+
+
+def renormalize(data, mini, maxi):
+    data = data - np.min(data)
+    data = data / np.max(data)
+    data = data * (maxi - mini)
+    data = data + mini
     return data
 
 
@@ -3117,6 +3126,141 @@ def plot_survival_threshold(
 
     ax.set_title(f"Survival given {variable_name}")
     return fig, ax
+
+
+def plot_survival_coeffs(
+    model, 
+    data=None, 
+    columns=None, 
+    hazard_ratios=False, 
+    colors=None, 
+    min_size=1,
+    max_size=5,
+    auto_colors=False,
+    grey_non_significant=True,
+    default_color='royalblue',
+    y_ticks_coeff=0.25,
+    ax=None, 
+    **errorbar_kwargs,
+    ):
+    """
+    Produces a visual representation of the coefficients (i.e. log hazard ratios), including their standard errors and magnitudes.
+
+    Parameters
+    ----------
+    columns : list, optional
+        specify a subset of the columns to plot
+    hazard_ratios: bool, optional
+        by default, ``plot`` will present the log-hazard ratios (the coefficients). However, by turning this flag to True, the hazard ratios are presented instead.
+    errorbar_kwargs:
+        pass in additional plotting commands to matplotlib errorbar command
+
+    Examples
+    ---------
+    >>> cph = CoxPHFitter(penalizer=alpha, l1_ratio=l1_ratio)
+    >>> cph.fit(df_surv, duration_col=duration_col, event_col=event_col, strata=strata)
+    >>> ax = plot_survival_coeffs(cph, data=df_surv)
+
+    Returns
+    -------
+    ax: matplotlib axis
+        the matplotlib axis that be edited.
+
+    """
+    from matplotlib import pyplot as plt
+
+    if ax is None:
+        ax = plt.gca()
+
+    errorbar_kwargs.setdefault("c", "k")
+    errorbar_kwargs.setdefault("fmt", "o")
+    errorbar_kwargs.setdefault("markerfacecolor", "white")
+    errorbar_kwargs.setdefault("markeredgewidth", 1.25)
+    errorbar_kwargs.setdefault("elinewidth", 1.25)
+    errorbar_kwargs.setdefault("capsize", None)
+
+    z = inv_normal_cdf(1 - model.alpha / 2)
+    user_supplied_columns = True
+
+    if columns is None:
+        user_supplied_columns = False
+        columns = model.params_.index
+
+    yaxis_locations = np.arange(len(columns))
+    log_hazards = model.params_.loc[columns].values.copy()
+
+    order = list(range(len(columns) - 1, -1, -1)) if user_supplied_columns else np.argsort(log_hazards)
+
+    if colors is None:
+        if auto_colors:
+            cols_cmap = make_cluster_cmap(columns)
+            # make color mapper
+            # series to sort by decreasing order
+            n_colors = len(cols_cmap)
+            colors = [cols_cmap[i % n_colors] for i in range(len(columns))]
+        else:
+            colors = [default_color] * len(order)
+    if grey_non_significant:
+        coefs_sig = get_significant_coefficients(model.confidence_intervals_)
+        # model[pval_col][i]<= 0.05
+        colors = [x if columns[i] in coefs_sig else 'k' for i, x in enumerate(colors)]
+    colors = np.array(colors)[order]
+    if data is not None:
+        weights = data.loc[:, columns].sum(axis=0)
+        sizes = renormalize(np.array(weights), min_size, max_size)[order] * 50
+        errorbar_kwargs['fmt'] = 'none'
+    else:
+        sizes = np.ones(len(columns)) * min_size * 50
+    # errorbar_kwargs["s"] = sizes
+
+    if hazard_ratios:
+        exp_log_hazards = np.exp(log_hazards)
+        upper_errors = exp_log_hazards * (np.exp(z * model.standard_errors_[columns].values) - 1)
+        lower_errors = exp_log_hazards * (1 - np.exp(-z * model.standard_errors_[columns].values))
+        ax.scatter(
+            exp_log_hazards[order],
+            yaxis_locations,
+            c=colors, 
+            s=sizes, 
+            alpha=0.5,
+            # cmap='viridis',
+            )
+        ax.errorbar(
+            exp_log_hazards[order],
+            yaxis_locations,
+            xerr=np.vstack([lower_errors[order], upper_errors[order]]),
+            **errorbar_kwargs,
+        )
+        ax.set_xlabel("HR (%g%% CI)" % ((1 - model.alpha) * 100))
+    else:
+        symmetric_errors = z * model.standard_errors_[columns].values
+        ax.scatter(
+            log_hazards[order],
+            yaxis_locations,
+            c=colors, 
+            s=sizes, 
+            alpha=0.5,
+            # cmap='viridis',
+            )
+        ax.errorbar(
+            log_hazards[order], 
+            yaxis_locations, 
+            xerr=symmetric_errors[order], 
+            **errorbar_kwargs)
+        ax.set_xlabel("log(HR) (%g%% CI)" % ((1 - model.alpha) * 100))
+
+    best_ylim = ax.get_ylim()
+    ax.vlines(1 if hazard_ratios else 0, -2, len(columns) + 1, linestyles="dashed", linewidths=1, alpha=0.65, color="k")
+    ax.set_ylim(best_ylim)
+
+    tick_labels = [columns[i] for i in order]
+
+    ax.set_yticks(yaxis_locations);
+    ax.set_yticklabels(tick_labels);
+    fig = ax.get_figure()
+    fig.set_size_inches([6.4, y_ticks_coeff * len(columns)])
+
+    return ax
 
 
 def find_survival_variable(surv, X, reverse_response=False, return_table=True, return_model=True, model_kwargs=None, model_fit=None):
