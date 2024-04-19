@@ -50,6 +50,7 @@ try:
 except:
     from umap import UMAP
 try:
+    import cupy as cp
     import cugraph
     import cudf
     gpu_clustering = True
@@ -58,6 +59,16 @@ except:
     gpu_clustering = False
 from pycave.bayes import GaussianMixture
 
+
+
+def to_numpy(data):
+    if isinstance(data, (pd.DataFrame, pd.Series)):
+        data = data.values.ravel()
+    if gpu_clustering:
+        # cupy is available
+        if isinstance(data, cp.ndarray):
+            data = cp.asnumpy(data)
+    return data
 
 
 ############ Make test networks ############
@@ -3373,16 +3384,22 @@ def get_clusterer(
                     G = ty.to_iGraph(embedding, embedding_pairs)
                     
             if clusterer_type == "leiden":
-                if gpu_clustering:        
+                if gpu_clustering:
+                    if verbose > 1:
+                        print("performing leiden clustering on GPU")    
                     partition, modularity_score = cugraph.leiden(G, max_iter=100, resolution=resolution)
                     cluster_labels = partition['partition'].values
                 else:
+                    if verbose > 1:
+                        print("performing leiden clustering on CPU")
                     partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution=resolution, seed=0)
                     # or other partition such as la.RBERVertexPartition
                     cluster_labels = np.array(partition.membership)
 
             elif clusterer_type == "ecg":
                 if gpu_clustering:
+                    if verbose > 1:
+                        print("performing ECG clustering on GPU")
                     partition = cugraph.ecg(G, min_weight=ecg_min_weight, ensemble_size=ecg_ensemble_size)
                     cluster_labels = partition['partition'].values
                 else:
@@ -3390,9 +3407,13 @@ def get_clusterer(
 
             elif clusterer_type == "spectral":
                 if gpu_clustering:
+                    if verbose > 1:
+                        print("performing spectral clustering on GPU")
                     partition = cugraph.spectralBalancedCutClustering(G, n_clusters)
                     cluster_labels = partition['cluster'].values
                 else:
+                    if verbose > 1:
+                        print("performing spectral clustering on CPU")
                     from sklearn.cluster import SpectralClustering
                     cluster_labels = SpectralClustering(
                         n_clusters=n_clusters, 
@@ -3402,12 +3423,19 @@ def get_clusterer(
 
         elif clusterer_type == "gmm":
             if use_gpu:
+                if verbose > 1:
+                    print("performing GMM clustering on GPU")
                 estimator = GaussianMixture(n_clusters, trainer_params=dict(accelerator='gpu', devices=1))
             else:
+                if verbose > 1:
+                    print("performing GMM clustering on CPU")
                 estimator = GaussianMixture(n_clusters)
             # make cluster predictions
             estimator.fit(embedding.astype(np.float32))
             cluster_labels = np.array(estimator.predict(embedding.astype(np.float32)))
+            
+        # make sure cluster_labels is numpy array
+        cluster_labels = to_numpy(cluster_labels)
 
         nb_clust = len(np.unique(cluster_labels))
         if verbose > 0: 
