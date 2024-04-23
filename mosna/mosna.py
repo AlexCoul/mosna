@@ -31,7 +31,6 @@ from sklearn import linear_model
 import xgboost
 from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
-import hdbscan
 import composition_stats as cs
 import igraph as ig
 import scanorama
@@ -47,15 +46,17 @@ import dask
 from tysserand import tysserand as ty
 
 try:
-    from cuml import UMAP
-except:
-    from umap import UMAP
-try:
     import cupy as cp
     import cugraph
     import cudf
+    from cuml import UMAP
+    from cuml import HDBSCAN
+    from cuml.cluster.hdbscan import all_points_membership_vectors
     gpu_clustering = True
 except:
+    from umap import UMAP
+    from hdbscan import HDBSCAN
+    from hdbscan import all_points_membership_vectors
     import leidenalg as la
     gpu_clustering = False
 from pycave.bayes import GaussianMixture
@@ -2146,7 +2147,7 @@ def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_siz
                         start = time()
                         # Clustering
                         if soft_clustering:
-                            clusterer = hdbscan.HDBSCAN(
+                            clusterer = HDBSCAN(
                                 min_cluster_size=min_cluster_size, 
                                 min_samples=None, 
                                 prediction_data=True, 
@@ -2154,13 +2155,13 @@ def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_siz
                                 **args_clust,
                             )
                             clusterer.fit(embed_clust)
-                            soft_clusters = hdbscan.all_points_membership_vectors(clusterer)
+                            soft_clusters = all_points_membership_vectors(clusterer)
                             if len(soft_clusters.shape) > 1:
                                 labels_hdbs = soft_clusters.argmax(axis=1)
                             else:
                                 labels_hdbs = soft_clusters
                         else:
-                            clusterer = hdbscan.HDBSCAN( 
+                            clusterer = HDBSCAN( 
                                 min_cluster_size=min_cluster_size, 
                                 min_samples=1,
                                 core_dist_n_jobs=parallel_clustering,
@@ -3359,6 +3360,8 @@ def get_clusterer(
         n_clusters=None,
         ecg_min_weight=0.05, 
         ecg_ensemble_size=20,
+        min_cluster_size=0.001,
+        noise_to_cluster=False,
         flavor=None,
         force_recompute=False, 
         use_gpu=True,
@@ -3452,6 +3455,11 @@ def get_clusterer(
         cluster_dir.mkdir(parents=True, exist_ok=True)
         clusterer_name = f"spectral_n_clusters-{n_clusters}"
         reduced_net_path = reducer_dir / f'edges_n_neighbors-{k_cluster}.parquet'
+    elif clusterer_type == "hdbscan":
+        assert min_cluster_size is not None
+        cluster_dir = reducer_dir / f"clusterer-{clusterer_type}"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        clusterer_name = f"hdbscan_min_cluster_size-{min_cluster_size}_noise_to_cluster-{noise_to_cluster}"
     elif clusterer_type == "gmm":
         assert n_clusters is not None
         cluster_dir = reducer_dir / f"clusterer-{clusterer_type}"
@@ -3470,12 +3478,18 @@ def get_clusterer(
         
         # load estimator or network data for return
         if clusterer_type in ['leiden', 'ecg', 'spectral']:
-            if gpu_clustering:
-                edges = cudf.read_parquet(reduced_net_path)
-            else:
-                edges = pd.read_parquet(reduced_net_path)
-        elif clusterer_type == "gmm":
-            estimator = joblib.load(str(file_path) + '_estimator.joblib')
+            try:
+                if gpu_clustering:
+                    edges = cudf.read_parquet(reduced_net_path)
+                else:
+                    edges = pd.read_parquet(reduced_net_path)
+            except FileNotFoundError:
+                edges = None
+        elif clusterer_type in ["hdbscan", "gmm"]:
+            try:
+                clusterer = joblib.load(str(file_path) + '_clusterer.joblib')
+            except FileNotFoundError:
+                clusterer = None
         save_net_data = False
     else:
         # get the embedding of data
@@ -3565,18 +3579,47 @@ def get_clusterer(
                         random_state=0,
                         ).fit_predict(embedding)
 
+        elif clusterer_type == 'hdbscan':
+            if min_cluster_size < 1:
+                min_cluster_size = int(min_cluster_size * len(embedding))
+            args_clust = {}
+            if not gpu_clustering:
+                args_clust['core_dist_n_jobs'] = cpu_count()
+            
+            if noise_to_cluster:
+                clusterer = HDBSCAN(
+                    min_cluster_size=min_cluster_size, 
+                    min_samples=None, 
+                    prediction_data=True, 
+                    **args_clust,
+                )
+                clusterer.fit(embedding)
+                soft_clusters = all_points_membership_vectors(clusterer)
+                if len(soft_clusters.shape) > 1:
+                    cluster_labels = soft_clusters.argmax(axis=1)
+                else:
+                    cluster_labels = soft_clusters
+            else:
+                clusterer = HDBSCAN( 
+                    min_cluster_size=min_cluster_size, 
+                    min_samples=1,
+                    **args_clust,
+                )
+                clusterer.fit(embedding)
+                cluster_labels = clusterer.labels_
+
         elif clusterer_type == "gmm":
             if use_gpu:
                 if verbose > 1:
                     print("performing GMM clustering on GPU")
-                estimator = GaussianMixture(n_clusters, trainer_params=dict(accelerator='gpu', devices=1))
+                clusterer = GaussianMixture(n_clusters, trainer_params=dict(accelerator='gpu', devices=1))
             else:
                 if verbose > 1:
                     print("performing GMM clustering on CPU")
-                estimator = GaussianMixture(n_clusters)
+                clusterer = GaussianMixture(n_clusters)
             # make cluster predictions
-            estimator.fit(embedding.astype(np.float32))
-            cluster_labels = np.array(estimator.predict(embedding.astype(np.float32)))
+            clusterer.fit(embedding.astype(np.float32))
+            cluster_labels = np.array(clusterer.predict(embedding.astype(np.float32)))
             
         # make sure cluster_labels is numpy array
         cluster_labels = to_numpy(cluster_labels)
@@ -3590,10 +3633,10 @@ def get_clusterer(
         if save_net_data:
             edges.to_parquet(reduced_net_path)
         return cluster_labels, cluster_dir, nb_clust, edges
-    elif clusterer_type == "gmm":
+    elif clusterer_type in ["hdbscan", "gmm"]:
         if save_net_data:
-            joblib.dump(estimator, str(file_path) + '_estimator.joblib')
-        return cluster_labels, cluster_dir, nb_clust, estimator
+            joblib.dump(clusterer, str(file_path) + '_estimator.joblib')
+        return cluster_labels, cluster_dir, nb_clust, clusterer
 
 
 def relabel_clusters(
