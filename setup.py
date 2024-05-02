@@ -27,12 +27,14 @@ setup(
                       'pandas','scipy', 'statsmodels', 
                       'scikit-image', 'scikit-learn', 'ipykernel',
                       'pyarrow', 'tqdm', 'napari', 'colorcet',
-                      'composition_stats', 'tysserand', 
+                      'composition_stats', 'tysserand', 'scikit-survival', 
                       'igraph', 'leidenalg', 'openpyxl', 'odfpy',
                       'fastcluster', 'lifelines', 'hdbscan', 'umap-learn',
                       'dask', 'xgboost', 'gudhi', 'torch_geometric',
-                      'torch_sparse', 'scanorama', 'pycave',
-                      'scanit @ git+https://github.com/zcang/SCAN-IT.git',
+                      'scanorama', 'pycave',
+                      # to fix:  
+                      #'torch_sparse', 
+                      # 'scanit @ git+https://github.com/zcang/SCAN-IT.git',
                      ],
-    keywords = 'spatial networks cells transcriptomics sociology econometrics'
+    keywords = 'spatial networks cells transcriptomics'
 )

@@ -2480,6 +2480,15 @@ def plot_niches_composition(counts=None, var=None, niches=None, var_label='varia
     return fig
 
 
+def plot_niches_histogram(niches, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots()
+    niche_id, niche_count = np.unique(niches, return_counts=True)
+    ax.bar(niche_id, niche_count, width=0.8)
+    ax.set_xticks(niche_id)
+    return ax
+    
+
 ###### Survival and response statistics ######
 
 def clean_data(
@@ -3171,7 +3180,7 @@ def plot_survival_coeffs(
     from matplotlib import pyplot as plt
 
     if ax is None:
-        ax = plt.gca()
+        fig, ax = plt.subplots()
 
     errorbar_kwargs.setdefault("c", "k")
     errorbar_kwargs.setdefault("fmt", "o")
@@ -3363,6 +3372,7 @@ def get_clusterer(
         min_cluster_size=0.001,
         noise_to_cluster=False,
         flavor=None,
+        avoid_neigh_overflow=True,
         force_recompute=False, 
         use_gpu=True,
         random_state=None,
@@ -3408,6 +3418,9 @@ def get_clusterer(
     flavor : str, None
         If 'CellCharter', uses UMAP for dimensionality reduction, and a gaussian mixture
         model for clustering. 
+    avoid_neigh_overflow : bool, True
+        Whether the number of neighbors for clustering is limited by the number of
+        neighbors for dimensionality reduction.
     force_recompute : bool
         Whether computation occurs even if results already exist in `save_dir`.
     use_gpu : boo
@@ -3437,6 +3450,10 @@ def get_clusterer(
                 n_clusters = 10
     reducer_name = f"reducer-{reducer_type}_dim-{dim_clust}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
     reducer_dir = Path(save_dir) / reducer_name
+    if avoid_neigh_overflow and k_cluster > n_neighbors:
+        if verbose > 0:
+            print('setting k_cluster = {k_cluster} to n_neighbors: {n_neighbors}')
+        k_cluster = n_neighbors
 
     if clusterer_type == "leiden":
         cluster_dir = reducer_dir / f"clusterer-{clusterer_type}_n_neighbors-{k_cluster}"
