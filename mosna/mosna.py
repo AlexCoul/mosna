@@ -3335,7 +3335,7 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
     >>> embedding, reducer = get_reducer(data=var_aggreg, save_dir=nas_dir)
     """
 
-    reducer_name = f"reducer-{reducer_type}_dim-{n_components}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
+    reducer_name = make_reducer_name(reducer_type, n_components, n_neighbors, metric, min_dist)
     save_dir = Path(save_dir) / reducer_name
     file_path = save_dir / "embedding"
     if os.path.exists(str(file_path) + '.npy') and not force_recompute:
@@ -3346,7 +3346,8 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
         else:
             reducer = None
     else:
-        if verbose > 0: print("Computing dimensionality reduction")
+        if verbose > 0: 
+            print("Computing dimensionality reduction")
         if reducer_type == 'umap':
             reducer = UMAP(
                 random_state=random_state,
@@ -3355,10 +3356,17 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
                 metric=metric,
                 min_dist=min_dist,
                 )
-        if isinstance(data, pd.DataFrame):
-            embedding = reducer.fit_transform(data.values)
-        else:
-            embedding = reducer.fit_transform(data)
+            if isinstance(data, pd.DataFrame):
+                embedding = reducer.fit_transform(data.values)
+            else:
+                embedding = reducer.fit_transform(data)
+        elif reducer_type == 'none':
+            reducer = {'reducer_type': 'none'}
+            if isinstance(data, pd.DataFrame):
+                embedding = data.values
+            else:
+                embedding = data
+
         # save reduced coordinates
         save_dir.mkdir(parents=True, exist_ok=True)
         np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
