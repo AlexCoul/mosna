@@ -3281,6 +3281,20 @@ def find_survival_variable(surv, X, reverse_response=False, return_table=True, r
     pass
 
 
+def make_reducer_name(
+    reducer_type,
+    n_dimensions=None,
+    n_neighbors=None,
+    metric=None,
+    min_dist=None,
+    ):
+    if reducer_type == 'umap':
+        reducer_name = f"reducer-{reducer_type}_dim-{n_dimensions}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
+    elif reducer_type == 'none':
+        reducer_name = f"reducer-{reducer_type}"
+    return reducer_name
+
+
 def get_reducer(data, save_dir, reducer_type='umap', n_components=2, 
                 n_neighbors=15, metric='manhattan', min_dist=0.0, force_recompute=False, 
                 save_reducer=False, random_state=None, verbose=1):
