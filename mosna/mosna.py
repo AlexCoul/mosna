@@ -3470,7 +3470,7 @@ def get_clusterer(
             clusterer_type = 'gmm'
             if n_clusters is None:
                 n_clusters = 10
-    reducer_name = f"reducer-{reducer_type}_dim-{dim_clust}_nneigh-{n_neighbors}_metric-{metric}_min_dist-{min_dist}"
+    reducer_name = make_reducer_name(reducer_type, dim_clust, n_neighbors, metric, min_dist)
     reducer_dir = Path(save_dir) / reducer_name
     if avoid_neigh_overflow and k_cluster > n_neighbors:
         if verbose > 0:
@@ -3561,7 +3561,7 @@ def get_clusterer(
                 # need to build knn graph
                 if verbose > 1:
                     print('building knn graph')
-                embedding_pairs = ty.build_knn(embedding, k=k_cluster)
+                embedding_pairs = ty.build_knn(embedding, k=k_cluster, metric=metric)
 
                 if gpu_clustering:
                     # send edges to GPU, with dummy weights
@@ -3589,7 +3589,7 @@ def get_clusterer(
                 else:
                     if verbose > 1:
                         print("performing leiden clustering on CPU")
-                    partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution=resolution, seed=0)
+                    partition = la.find_partition(G, la.RBConfigurationVertexPartition, resolution_parameter=resolution, seed=0)
                     # or other partition such as la.RBERVertexPartition
                     cluster_labels = np.array(partition.membership)
 
