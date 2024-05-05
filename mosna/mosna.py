@@ -1577,7 +1577,10 @@ def make_features_NAS(X, pairs, order=1, var_names=None, stat_funcs='default', s
     if stat_names == 'default':
         stat_names = ['mean', 'std']
     elif isinstance(stat_names, str):
-        stat_names = [stat_names]
+        if '-' in stat_names:
+            stat_names = stat_names.split('-')
+        else:
+            stat_names = [stat_names]
     nb_funcs = len(stat_funcs)
     nas = np.zeros((nb_obs, nb_var*nb_funcs))
 
