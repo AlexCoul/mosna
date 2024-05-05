@@ -2833,11 +2833,19 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
     Plot the distribution of variables by groups.
     """
 
+    data = data.copy()
     # Select variables that will be plotted
     if groups is None:
         groups = data[group_var].unique()
     if len(groups) == 2 and pval_data is not None:
         if isinstance(pval_data, str) and pval_data == 'compute':
+            if 'other' in groups:
+                # need to transform data
+                data[group_var] = data[group_var].astype('category')
+                select = data[group_var] != groups[1]
+                data[group_var] = data[group_var].cat.add_categories("other")
+                data.loc[select, group_var] = 'other'
+                data[group_var] = data[group_var].cat.remove_unused_categories()
             pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, composed_order=0)
         nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
         print(f'There are {nb_vars} significant variables in `{pval_col}`')
