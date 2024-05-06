@@ -2825,7 +2825,7 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude
     return pvals
 
 
-def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, 
+def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, test='Mann-Whitney',
                         max_cols=-1, exclude_vars=None, id_vars=None, var_name='variable', value_name='value', 
                         multi_ind_to_col=False, figsize=(20, 6), fontsize=20, orientation=30, ax=None,
                         plot_type='boxplot', add_points=True):
@@ -2846,7 +2846,7 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
                 data[group_var] = data[group_var].cat.add_categories("other")
                 data.loc[select, group_var] = 'other'
                 data[group_var] = data[group_var].cat.remove_unused_categories()
-            pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, composed_order=0)
+            pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, composed_order=0, test=test)
         nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
         print(f'There are {nb_vars} significant variables in `{pval_col}`')
         if nb_vars == 0:
