@@ -3410,6 +3410,7 @@ def get_clusterer(
         dim_clust=2, 
         k_cluster=15, 
         resolution=0.005,
+        resolution_parameter=None,
         n_clusters=None,
         ecg_min_weight=0.05, 
         ecg_ensemble_size=20,
@@ -3483,6 +3484,10 @@ def get_clusterer(
     >>> data = np.random.rand(800, 4)
     >>> cluster_labels, cluster_dir, nb_clust, G = get_clusterer(data, "test")
     """
+
+    # API compatibility
+    if resolution_parameter is not None:
+        resolution = resolution_parameter
 
     if flavor is not None:
         if flavor == 'UTAG':
