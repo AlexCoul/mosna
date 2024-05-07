@@ -3153,6 +3153,7 @@ def plot_survival_coeffs(
     model, 
     data=None, 
     columns=None, 
+    p_thresh=None,
     hazard_ratios=False, 
     colors=None, 
     min_size=1,
@@ -3169,8 +3170,14 @@ def plot_survival_coeffs(
 
     Parameters
     ----------
+    model : lifeline object
+        Trained lifeline CoxPH model.
+    data : pd.DataFrame, None
+        Survival data used to add more information on plots such as coeficients size.
     columns : list, optional
         specify a subset of the columns to plot
+    p_thresh : float, None
+        The p-value threshold used to filter out coefficients of the CoxPH model.
     hazard_ratios: bool, optional
         by default, ``plot`` will present the log-hazard ratios (the coefficients). However, by turning this flag to True, the hazard ratios are presented instead.
     errorbar_kwargs:
@@ -3206,6 +3213,10 @@ def plot_survival_coeffs(
     if columns is None:
         user_supplied_columns = False
         columns = model.params_.index
+
+    if p_thresh is not None:
+        assert 0.0 < p_thresh < 1.0
+        columns = model.summary.index[model.summary['p'] <= p_thresh]
 
     yaxis_locations = np.arange(len(columns))
     log_hazards = model.params_.loc[columns].values.copy()
