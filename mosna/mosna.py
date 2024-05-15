@@ -4138,6 +4138,7 @@ def logistic_regression(
     plot_coefs=True,
     save_coefs=False,
     save_scores=False,
+    save_preds=False,
     save_plot_figures=False,
     str_prefix='',
     figsize=(8, 8),
@@ -4226,6 +4227,7 @@ def logistic_regression(
             X_test = X
             y_train = y
             y_test = y
+        test_index = X_test.index
         # Standardize data to give same weight to regularization
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
@@ -4278,6 +4280,15 @@ def logistic_regression(
             nb_coef = coef.shape[0]
             if save_coefs:
                 coef.to_csv(dir_save / f"LogisticRegressionCV_coefficients.csv")
+            
+            if save_preds:
+                preds = pd.DataFrame(data={'y_pred_proba': y_pred_proba,
+                                           'y_pred': y_pred,
+                                           'y_test': y_test,
+                                           'l1_ratio': l1_ratio,
+                                           'C': C},
+                                     index=test_index)
+                preds.to_csv(dir_save / f'{str_prefix}logistic_regression_predictions_{l1_name}.csv')
             
             if plot_coefs:
                 nb_coef_plot = min(20, nb_coef)
