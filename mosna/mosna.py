@@ -279,6 +279,7 @@ def transform_nodes(
     use_cols: Union[Iterable, None] = None,
     method: str = 'clr',
     save_dir: Union[str, Path] = 'auto',
+    force_recompute: bool = False,
     ):
     """
     Load nodes data in a directory, transform and save them
@@ -305,6 +306,9 @@ def transform_nodes(
     save_dir : Union[Path, str, None]
         If auto, save_dir is a sub-folder of nodes_dir named after
         the data transformation method.
+    force_recompute : bool, False
+        If True, recompute and rewrite output even if it
+        already exists on disk.
     
     Returns
     -------
@@ -347,15 +351,17 @@ def transform_nodes(
             str_group = f'{id_level_1}-{data_info[0]}'
         elif len(data_info) == 2:
             str_group = f'{id_level_1}-{data_info[0]}_{id_level_2}-{data_info[1]}'
-        nodes = read_fct(nodes_dir / f'nodes_{str_group}.{extension}')
+        file_name = save_dir / f'nodes_{str_group}.parquet'
+        if not file_name.exists() or force_recompute:
+            nodes = read_fct(nodes_dir / f'nodes_{str_group}.{extension}')
 
-        nodes_transfo = transform_data(
-            data=nodes, 
-            groups=None,  # node files already for a single sample or patient
-            use_cols=use_cols,
-            method=method)
+            nodes_transfo = transform_data(
+                data=nodes, 
+                groups=None,  # node files already for a single sample or patient
+                use_cols=use_cols,
+                method=method)
 
-        nodes_transfo.to_parquet(save_dir / f'nodes_{str_group}.parquet', index=False)
+            nodes_transfo.to_parquet(file_name, index=False)
         
     return save_dir
 
@@ -526,7 +532,9 @@ def batch_correct_nodes(
     max_dimred: int = 100,
     return_dense: bool = True,
     save_dir: Union[str, Path] = 'auto',
+    force_recompute: bool = False,
     return_nodes: bool = False,
+    verbose: int = 0,
     ):
     """
     Batch correct omic data from nodes in a directory.
@@ -559,8 +567,13 @@ def batch_correct_nodes(
         Return ndarray instead of csr matrix.
     save_dir : Union[Path, str]
         If auto, save_dir is a sub-folder of nodes_dir.
+    force_recompute : bool, False
+        If True, recompute and rewrite output even if it
+        already exists on disk.
     return_nodes : bool, False
         Return batch corrected aggregated nodes.
+    verbose : int, 0
+        Verbosity level.
     
     Returns
     -------
@@ -570,6 +583,10 @@ def batch_correct_nodes(
 
     nodes_dir = Path(nodes_dir)
     data_single_level = id_level_2 is None
+    
+    if save_dir == 'auto':
+        save_dir = nodes_dir / f"batch_correction-scanorama_on-{batch_key}"
+    save_dir.mkdir(parents=True, exist_ok=True)
 
     nodes_agg = aggregate_nodes(
         nodes_dir=nodes_dir,
@@ -581,38 +598,73 @@ def batch_correct_nodes(
         add_sample_info=add_sample_info,
         )
 
-    nodes_agg_corr = batch_correct_nodes_agg(
-        nodes_agg=nodes_agg,
-        batch_key=batch_key,
-        use_cols=use_cols,
-        max_dimred=max_dimred,
-        return_dense=return_dense,
-        add_sample_info=False, 
-        )
-    
-    # replace raw aggregated variables by batch corrected variables
-    # while keeping all other variables
-    nodes_corr = nodes_agg.copy()
-    nodes_corr.loc[:, use_cols] = nodes_agg_corr.loc[:, use_cols]
-    del nodes_agg_corr
-    
-    if save_dir == 'auto':
-        save_dir = nodes_dir / f"batch_correction-scanorama_on-{batch_key}"
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    # save nodes data
-    for id_1 in nodes_corr[id_level_1].unique():
-        select_1 = nodes_corr[id_level_1] == id_1
-        nodes_1 = nodes_corr.loc[select_1, :]
-        if data_single_level:
-            str_group = f'{id_level_1}-{id_1}'
-            nodes_1.to_parquet(save_dir / f'nodes_{str_group}.parquet', index=False)
+    if not force_recompute:
+        # check if all data already exist
+        all_exist = True
+        for id_1 in nodes_agg[id_level_1].unique():
+            select_1 = nodes_agg[id_level_1] == id_1
+            nodes_1 = nodes_agg.loc[select_1, :]
+            if data_single_level:
+                str_group = f'{id_level_1}-{id_1}'
+                file_name = save_dir / f'nodes_{str_group}.parquet'
+                if not file_name.exists():
+                    all_exist = False
+                    break
+            else:
+                for id_2 in nodes_1[id_level_2].unique():
+                    select_2 = nodes_1[id_level_2] == id_2
+                    str_group = f'{id_level_1}-{id_1}_{id_level_2}-{id_2}'
+                    file_name = save_dir / f'nodes_{str_group}.parquet'
+                    if not file_name.exists():
+                        all_exist = False
+                        break
+        if not all_exist:
+            force_recompute = True
+            if verbose > 0:
+                print("Some output files are missing, starting computation of batch correction")
         else:
-            for id_2 in nodes_1[id_level_2].unique():
-                select_2 = nodes_1[id_level_2] == id_2
-                nodes_2 = nodes_1.loc[select_2, :]
-                str_group = f'{id_level_1}-{id_1}_{id_level_2}-{id_2}'
-                nodes_2.to_parquet(save_dir / f'nodes_{str_group}.parquet', index=False)
+            if verbose > 0:
+                print("All output files already exist, skipping computation of batch correction")
+            if return_nodes:
+                    nodes_corr = aggregate_nodes(
+                        nodes_dir=save_dir,
+                        id_level_1=id_level_1,
+                        id_level_2=id_level_2, 
+                        extension=extension,
+                        data_index=data_index,
+                        use_cols=None, # aggregate all info (coordinates, markers, ...)
+                        add_sample_info=add_sample_info,
+                        )
+
+    if force_recompute:
+        nodes_agg_corr = batch_correct_nodes_agg(
+            nodes_agg=nodes_agg,
+            batch_key=batch_key,
+            use_cols=use_cols,
+            max_dimred=max_dimred,
+            return_dense=return_dense,
+            add_sample_info=False, 
+            )
+        
+        # replace raw aggregated variables by batch corrected variables
+        # while keeping all other variables
+        nodes_corr = nodes_agg.copy()
+        nodes_corr.loc[:, use_cols] = nodes_agg_corr.loc[:, use_cols]
+        del nodes_agg_corr
+
+        # save nodes data
+        for id_1 in nodes_corr[id_level_1].unique():
+            select_1 = nodes_corr[id_level_1] == id_1
+            nodes_1 = nodes_corr.loc[select_1, :]
+            if data_single_level:
+                str_group = f'{id_level_1}-{id_1}'
+                nodes_1.to_parquet(save_dir / f'nodes_{str_group}.parquet', index=False)
+            else:
+                for id_2 in nodes_1[id_level_2].unique():
+                    select_2 = nodes_1[id_level_2] == id_2
+                    nodes_2 = nodes_1.loc[select_2, :]
+                    str_group = f'{id_level_1}-{id_1}_{id_level_2}-{id_2}'
+                    nodes_2.to_parquet(save_dir / f'nodes_{str_group}.parquet', index=False)
 
     if return_nodes:
         return save_dir, nodes_corr
