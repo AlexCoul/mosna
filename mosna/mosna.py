@@ -3588,7 +3588,10 @@ def get_clusterer(
                 # need to build knn graph
                 if verbose > 1:
                     print('building knn graph')
-                embedding_pairs = ty.build_knn(embedding, k=k_cluster, metric=metric)
+                # from the UMAP documentation:
+                # "By default UMAP embeds data into Euclidean space"
+                # so the clusterer should use the Euclidean metric
+                embedding_pairs = ty.build_knn(embedding, k=k_cluster, metric='euclidean')
 
                 if gpu_clustering:
                     # send edges to GPU, with dummy weights
