@@ -29,102 +29,23 @@ is correctly set up before executing the script, see link: https://bitbucket.org
 """
 
 
-import sys
-import math
-import os
-import numpy as np
-import scipy
-import scipy.stats
-from scipy.stats import zscore
-from scipy.spatial.distance import euclidean,squareform,pdist
-sys.setrecursionlimit(10000)
-import smfishHmrf.reader as reader
-from smfishHmrf.HMRFInstance import HMRFInstance
-from smfishHmrf.DatasetMatrix import DatasetMatrix, DatasetMatrixSingleField
 
+# load_genes
+def load_data(input_data_dir, genes = "genes", coordiantes_file = "fcortex.coordinates.txt", expression_file = "fcortex.expression.txt"):
+    file_genes = os.path.join(input_data_dir, genes)
+    Genes = reader.read_genes(file_genes)
 
-import matplotlib.pyplot as plt
+    file_coords = os.path.join(input_data_dir, coordiantes_file)
+    Coords, field = reader.read_coord(file_coords)
 
+    file_expression = os.path.join(input_data_dir, expression_file)
+    # Initialize an empty numpy array 
+    Expr = np.empty((len(Genes), Coords.shape[0]), dtype="float32")
+    for ind, g in enumerate(genes):# Loop over each gene in the list of genes
+        # For each gene, read its expression data from the file and assign it to the corresponding row in the 'expr' array
+        Expr[ind, :] = reader.read_expression(file_expression)
+    return expr
 
-
-
-
-if __name__=="__main__":
-
-    cortex_FDs = [0]  # Set field value, based on which to filter data
-
-    # Set directory paths and print to check if correct
-    base_dir = os.path.abspath(".")
-    print("Our base directory is set to {}".format(base_dir))
-
-    input_data_dir = os.path.join(base_dir, "data")
-    print("Our input data directory is set to {}".format(input_data_dir))
-
-    output_dir = os.path.join(base_dir, "output")
-    print("Our output directory is set to {}".format(output_dir))
-
-    # Get file containing gene names
-    file_genes = os.path.join(input_data_dir, "genes")
-    genes = reader.read_genes(file_genes)
-
-    print(genes)
-
-    # Get spatial coordinates
-    file_coords = os.path.join(input_data_dir, "fcortex.coordinates.txt")
-    spatial_coords, field = reader.read_coord(file_coords)
-
-    # Check if coordinates are stored correctly
-    print(spatial_coords[:5])
-
-    file_expression = os.path.join(input_data_dir, "fcortex.expression.txt")
-
-    #expr = np.empty((len(genes), spatial_coords.shape[0]), dtype="float32")
-    #    for ind,g in enumerate(genes):
-    #        expr[ind,:] = reader.read_expression("%s/pca_corrected/f%s.gene.%s.txt" % (input_data_dir, directory, roi, g))
-
-    expr = np.empty((len(genes), spatial_coords.shape[0]), dtype="float32")
-    for ind, g in enumerate(genes):
-        expr[ind, :] = reader.read_expression(file_expression)
-
-    # Check if gene expression values stored correctly
-    print(expr[:10])
-
-    # Filter data based on field (FD) value
-    good_i = np.array([i for i in range(spatial_coords.shape[0]) if field[i] in set(cortex_FDs)])
-    expr = expr[:,good_i]
-    spatial_coords = spatial_coords[good_i]
-    field = field[good_i]
-
-    print(field[:7])
-
-    ngene = len(genes)
-    ncell = spatial_coords.shape[0]
-
-    print("The number of genes is {}".format(ngene))
-
-    expr = zscore(expr, axis=1)	 #z-score per row (gene)
-    expr = zscore(expr, axis=0)  #z-score per column (cell)
-
-
-    this_dset = DatasetMatrixSingleField(expr, genes, None, spatial_coords)
-    this_dset.test_adjacency_list([0.3, 0.5, 1], metric="euclidean")        #      are other metrics possible here? Running the script with delaunay for example, doesn't work
-    this_dset.calc_neighbor_graph(0.3, metric="euclidean")          # Calculate network
-    this_dset.calc_independent_region()         # Determine the different regions in the network
-
-    #new_genes = reader.read_genes("../HMRF.genes")
-    #new_dset = this_dset.subset_genes(new_genes)
-
-
-    plt.scatter(spatial_coords[:, 0], spatial_coords[:, 1], c=this_dset.blocks, cmap='jet')
-    plt.xlabel('X coordinate')
-    plt.ylabel('Y coordinate')
-    plt.title('Independent Regions')
-    plt.colorbar()  # Show color scale
-
-    plt.savefig(os.path.join(output_dir, "independent_regions.png"))
-    print("Plot saved to:", os.path.join(output_dir, "independent_regions.png"))
-
-    print("Showing plot...")
-    plt.show()
-
-
+def filter_data_by_field(spatial_coords, field, cortex_FDs):
+    good_i = np.array([i for i in range(spatial_coords.shape[0]) if field[i] in cortex_FDs])
+    return spatial_coords[good_i], field[good_i]
