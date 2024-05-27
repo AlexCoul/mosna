@@ -1,0 +1,512 @@
+---
+title: "hmrf_test_script"
+format: html
+editor: visual
+---
+
+## 
+
+```{r}
+# Code Block 1 - Ensure Installation Correct
+
+# Ensure Giotto Suite is installed.
+if(!"Giotto" %in% installed.packages()) {
+  devtools::install_github("drieslab/Giotto@suite")
+}
+
+# Ensure GiottoData, a small, helper module for tutorials, is installed.
+if(!"GiottoData" %in% installed.packages()) {
+  devtools::install_github("drieslab/GiottoData")
+}
+library(Giotto)
+# Ensure the Python environment for Giotto has been installed.
+genv_exists = checkGiottoEnvironment()
+if(!genv_exists){
+  # The following command need only be run once to install the Giotto environment.
+  installGiottoEnvironment()
+}
+```
+
+```{r}
+# Code Block 2 - Set Paths and download data
+
+library(GiottoData)
+
+my_working_dir = '../output/seqfish_SS_cortex_data/'
+getSpatialDataset(dataset = 'seqfish_SS_cortex', directory = my_working_dir, method = 'wget')
+```
+
+```{r}
+# Code Block 3 - Set Giotto instructions
+
+#  set Giotto instructions
+instrs = createGiottoInstructions(save_plot = FALSE,
+                                  show_plot = TRUE,
+                                  save_dir = my_working_dir,
+                                  python_path = NULL)
+
+# create giotto object from provided paths ####
+expr_path = paste0(my_working_dir, "cortex_svz_expression.txt")
+loc_path = paste0(my_working_dir, "cortex_svz_centroids_coord.txt")
+meta_path = paste0(my_working_dir, "cortex_svz_centroids_annot.txt")
+#This dataset contains multiple field of views which need to be stitched together
+# first merge location and additional metadata
+SS_locations = data.table::fread(loc_path)
+cortex_fields = data.table::fread(meta_path)
+SS_loc_annot = data.table::merge.data.table(SS_locations, cortex_fields, by = 'ID')
+SS_loc_annot[, ID := factor(ID, levels = paste0('cell_',1:913))]
+data.table::setorder(SS_loc_annot, ID)
+# create file with offset information
+my_offset_file = data.table::data.table(field = c(0, 1, 2, 3, 4, 5, 6),
+                                        x_offset = c(0, 1654.97, 1750.75, 1674.35, 675.5, 2048, 675),
+                                        y_offset = c(0, 0, 0, 0, -1438.02, -1438.02, 0))
+# create a stitch file
+stitch_file = stitchFieldCoordinates(location_file = SS_loc_annot,
+                                     offset_file = my_offset_file,
+                                     cumulate_offset_x = T,
+                                     cumulate_offset_y = F,
+                                     field_col = 'FOV',
+                                     reverse_final_x = F,
+                                     reverse_final_y = T)
+stitch_file = stitch_file[,.(ID, X_final, Y_final)]
+stitch_file$ID <- as.character(stitch_file$ID)
+my_offset_file = my_offset_file[,.(field, x_offset_final, y_offset_final)]
+
+```
+
+```{r}
+# Code Block 4 - Create Giotto object, perform some normalization and make 1st visualization.
+
+
+# create Giotto object
+SS_seqfish <- createGiottoObject(expression = expr_path,
+                                 spatial_locs = stitch_file,
+                                 offset_file = my_offset_file,
+                                 instructions = instrs)
+# add additional annotation if wanted
+SS_seqfish = addCellMetadata(SS_seqfish,
+                             new_metadata = cortex_fields,
+                             by_column = T,
+                             column_cell_ID = 'ID')
+# subset data to the cortex field of views
+cell_metadata = pDataDT(SS_seqfish)
+cortex_cell_ids = cell_metadata[FOV %in% 0:4]$cell_ID
+SS_seqfish = subsetGiotto(SS_seqfish, cell_ids = cortex_cell_ids)
+# filter
+SS_seqfish <- filterGiotto(gobject = SS_seqfish,
+                           expression_threshold = 1,
+                           feat_det_in_min_cells = 10,
+                           min_det_feats_per_cell = 10,
+                           expression_values = c('raw'),
+                           verbose = T)
+# normalize
+SS_seqfish <- normalizeGiotto(gobject = SS_seqfish, scalefactor = 6000, verbose = T)
+# add gene & cell statistics
+SS_seqfish <- addStatistics(gobject = SS_seqfish)
+# adjust expression matrix for technical or known variables
+SS_seqfish <- adjustGiottoMatrix(gobject = SS_seqfish, expression_values = c('normalized'),
+                                 covariate_columns = c('nr_feats', 'total_expr'),
+                                 return_gobject = TRUE,
+                                 update_slot = c('custom'))
+# visualize
+spatPlot(gobject = SS_seqfish)
+
+
+```
+
+```{r}
+# Code Block 5
+
+## highly variable features (HVF)
+SS_seqfish <- calculateHVF(gobject = SS_seqfish)
+```
+
+```{r}
+# Code Block 6
+
+## select genes based on highly variable features and gene statistics, both found in feature (gene) metadata
+gene_metadata = fDataDT(SS_seqfish)
+featgenes = gene_metadata[hvf == 'yes' & perc_cells > 4 & mean_expr_det > 0.5]$feat_ID
+## run PCA on expression values (default)
+SS_seqfish <- runPCA(gobject = SS_seqfish, genes_to_use = featgenes, scale_unit = F, center = F)
+screePlot(SS_seqfish)
+```
+
+```{r}
+plotPCA(gobject = SS_seqfish)
+```
+
+```{r}
+SS_seqfish <- runUMAP(SS_seqfish, dimensions_to_use = 1:15, n_threads = 10)
+plotUMAP(gobject = SS_seqfish)
+```
+
+```{r}
+SS_seqfish <- runtSNE(SS_seqfish, dimensions_to_use = 1:15)
+plotTSNE(gobject = SS_seqfish)
+```
+
+```{r}
+## sNN network (default)
+SS_seqfish <- createNearestNetwork(gobject = SS_seqfish,
+                                   dimensions_to_use = 1:15,
+                                   k = 15)
+## Leiden clustering
+SS_seqfish <- doLeidenCluster(gobject = SS_seqfish,
+                              resolution = 0.4,
+                              n_iterations = 1000)
+plotUMAP(gobject = SS_seqfish,
+         cell_color = 'leiden_clus',
+         show_NN_network = T,
+         point_size = 2.5)
+```
+
+```{r}
+# (Time consuming step)
+
+## Leiden subclustering for specified clusters
+SS_seqfish = doLeidenSubCluster(gobject = SS_seqfish,
+                                cluster_column = 'leiden_clus',
+                                resolution = 0.2, k_neighbors = 10,
+                                pca_param = list(expression_values = 'normalized', scale_unit = F),
+                                nn_param = list(dimensions_to_use = 1:5),
+                                selected_clusters = c(5, 6, 7),
+                                name = 'sub_leiden_clus_select')
+
+```
+
+```{r}
+## set colors for clusters
+subleiden_order = c( 1.1, 2.1, 3.1, 4.1, 5.1, 5.2,
+                     6.1, 6.2, 7.1,  7.2, 8.1, 9.1)
+subleiden_colors = Giotto::getDistinctColors(length(subleiden_order))
+names(subleiden_colors) = subleiden_order
+plotUMAP(gobject = SS_seqfish,
+         cell_color = 'sub_leiden_clus_select', cell_color_code = subleiden_colors,
+         show_NN_network = T, point_size = 2.5, show_center_label = F,
+         legend_text = 12, legend_symbol_size = 3)
+```
+
+```{r}
+# Installation required for next code block
+
+#if(!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager');
+#BiocManager::install(c("ComplexHeatmap"))
+```
+
+```{r}
+## show cluster relationships
+showClusterHeatmap(gobject = SS_seqfish, cluster_column = 'sub_leiden_clus_select',
+                   row_names_gp = grid::gpar(fontsize = 9), column_names_gp = grid::gpar(fontsize = 9))
+```
+
+```{r}
+# install.packages('ggdendro')
+library(ggdendro)
+showClusterDendrogram(SS_seqfish, h = 0.5, rotate = T, cluster_column = 'sub_leiden_clus_select')
+```
+
+```{r}
+
+```
+
+```{r}
+# expression and spatial
+spatDimPlot(gobject = SS_seqfish, cell_color = 'sub_leiden_clus_select',
+            cell_color_code = subleiden_colors,
+            dim_point_size = 2, spat_point_size = 2)
+```
+
+```{r}
+# selected groups and provide new colors
+groups_of_interest = c(6.1, 6.2, 7.1, 7.2)
+group_colors = c('red', 'green', 'blue', 'purple'); names(group_colors) = groups_of_interest
+spatDimPlot(gobject = SS_seqfish, cell_color = 'sub_leiden_clus_select',
+            dim_point_size = 2, spat_point_size = 2,
+            select_cell_groups = groups_of_interest, cell_color_code = group_colors)
+```
+
+```{r}
+## gini
+gini_markers_subclusters = findMarkers_one_vs_all(gobject = SS_seqfish,
+                                                  method = 'gini',
+                                                  expression_values = 'normalized',
+                                                  cluster_column = 'sub_leiden_clus_select',
+                                                  min_feats = 20,
+                                                  min_expr_gini_score = 0.5,
+                                                  min_det_gini_score = 0.5)
+topgenes_gini = gini_markers_subclusters[, head(.SD, 2), by = 'cluster']
+## violin plot
+violinPlot(SS_seqfish, feats = unique(topgenes_gini$feats), cluster_column = 'sub_leiden_clus_select',
+           strip_text = 8, strip_position = 'right', cluster_custom_order = unique(topgenes_gini$cluster))
+```
+
+```{r}
+# cluster heatmap
+topgenes_gini2 = gini_markers_subclusters[, head(.SD, 6), by = 'cluster']
+plotMetaDataHeatmap(SS_seqfish, selected_feats = unique(topgenes_gini2$feats),
+                    custom_feat_order = unique(topgenes_gini2$feats),
+                    custom_cluster_order = unique(topgenes_gini2$cluster),
+                    metadata_cols = c('sub_leiden_clus_select'), x_text_size = 10, y_text_size = 10)
+```
+
+```{r}
+## general cell types
+## create vector with names
+clusters_cell_types_cortex = c('L6 eNeuron', 'L4 eNeuron', 'L2/3 eNeuron', 'L5 eNeuron',
+                               'Lhx6 iNeuron', 'Adarb2 iNeuron',
+                               'endothelial', 'mural',
+                               'OPC','Olig',
+                               'astrocytes', 'microglia')
+names(clusters_cell_types_cortex) = c(1.1, 2.1, 3.1, 4.1,
+                                      5.1, 5.2,
+                                      6.1, 6.2,
+                                      7.1, 7.2,
+                                      8.1, 9.1)
+SS_seqfish = annotateGiotto(gobject = SS_seqfish, annotation_vector = clusters_cell_types_cortex,
+                            cluster_column = 'sub_leiden_clus_select', name = 'cell_types')
+# cell type order and colors
+cell_type_order = c('L6 eNeuron', 'L5 eNeuron', 'L4 eNeuron', 'L2/3 eNeuron',
+                    'astrocytes', 'Olig', 'OPC','Adarb2 iNeuron', 'Lhx6 iNeuron',
+                    'endothelial', 'mural', 'microglia')
+cell_type_colors = subleiden_colors
+names(cell_type_colors) = clusters_cell_types_cortex[names(subleiden_colors)]
+cell_type_colors = cell_type_colors[cell_type_order]
+## violin plot
+violinPlot(gobject = SS_seqfish, feats = unique(topgenes_gini$feats),
+           strip_text = 7, strip_position = 'right',
+           cluster_custom_order = cell_type_order,
+           cluster_column = 'cell_types', color_violin = 'cluster')
+```
+
+```{r}
+# co-visualization
+spatDimPlot(gobject = SS_seqfish, cell_color = 'cell_types',
+            dim_point_size = 2, spat_point_size = 2, dim_show_cluster_center = F, dim_show_center_label = T)
+```
+
+```{r}
+## heatmap genes vs cells
+gini_markers_subclusters[, cell_types := clusters_cell_types_cortex[cluster] ]
+gini_markers_subclusters[, cell_types := factor(cell_types, cell_type_order)]
+data.table::setorder(gini_markers_subclusters, cell_types)
+plotHeatmap(gobject = SS_seqfish,
+            feats = gini_markers_subclusters[, head(.SD, 3), by = 'cell_types']$feats,
+            feat_order = 'custom',
+            feat_custom_order = unique(gini_markers_subclusters[, head(.SD, 3), by = 'cluster']$feats),
+            cluster_column = 'cell_types', cluster_order = 'custom',
+            cluster_custom_order = unique(gini_markers_subclusters[, head(.SD, 3), by = 'cell_types']$cell_types),
+            legend_nrows = 2)
+```
+
+```{r}
+#plotHeatmap(gobject = SS_seqfish,
+#            cluster_color_code = cell_type_colors,
+#            feats = gini_markers_subclusters[, head(.SD, 6), by = 'cell_types']$feats,
+#            feat_order = 'custom',
+#            feat_label_selection = gini_markers_subclusters[, head(.SD, 2), by = #'cluster']$feats,
+#            feat_custom_order = unique(gini_markers_subclusters[, head(.SD, 6), by = #'cluster']$feats),
+#            cluster_column = 'cell_types', cluster_order = 'custom',
+#            cluster_custom_order = unique(gini_markers_subclusters[, head(.SD, 3), by = #'cell_types']$cell_types),
+#            legend_nrows = 2)
+```
+
+```{r}
+SS_seqfish <- createSpatialGrid(gobject = SS_seqfish,
+                                sdimx_stepsize = 500,
+                                sdimy_stepsize = 500,
+                                minimum_padding = 50)
+spatPlot(gobject = SS_seqfish, show_grid = T, point_size = 1.5)
+```
+
+```{r}
+## delaunay network: stats + creation
+plotStatDelaunayNetwork(gobject = SS_seqfish, maximum_distance = 400, save_plot = F)
+SS_seqfish = createSpatialNetwork(gobject = SS_seqfish, minimum_k = 2, maximum_distance_delaunay = 400)
+## create spatial networks based on k and/or distance from centroid
+SS_seqfish <- createSpatialNetwork(gobject = SS_seqfish, method = 'kNN', k = 5, name = 'spatial_network')
+SS_seqfish <- createSpatialNetwork(gobject = SS_seqfish, method = 'kNN', k = 10, name = 'large_network')
+SS_seqfish <- createSpatialNetwork(gobject = SS_seqfish, method = 'kNN', k = 100,
+                                   maximum_distance_knn = 200, minimum_k = 2, name = 'distance_network')
+## visualize different spatial networks on first field (~ layer 1)
+cell_metadata = pDataDT(SS_seqfish)
+field1_ids = cell_metadata[FOV == 0]$cell_ID
+subSS_seqfish = subsetGiotto(SS_seqfish, cell_ids = field1_ids)
+spatPlot(gobject = subSS_seqfish, show_network = T,
+         network_color = 'blue', spatial_network_name = 'Delaunay_network',
+         point_size = 2.5, cell_color = 'cell_types')
+```
+
+```{r}
+spatPlot(gobject = subSS_seqfish, show_network = T,
+         network_color = 'blue', spatial_network_name = 'spatial_network',
+         point_size = 2.5, cell_color = 'cell_types')
+```
+
+```{r}
+spatPlot(gobject = subSS_seqfish, show_network = T,
+         network_color = 'blue', spatial_network_name = 'large_network',
+         point_size = 2.5, cell_color = 'cell_types')
+```
+
+```{r}
+spatPlot(gobject = subSS_seqfish, show_network = T,
+         network_color = 'blue', spatial_network_name = 'distance_network',
+         point_size = 2.5, cell_color = 'cell_types')
+```
+
+```{r}
+## 3 new methods to identify spatial genes
+km_spatialfeats = binSpect(SS_seqfish)
+#spatGenePlot(SS_seqfish, expression_values = 'scaled', genes = km_spatialfeats[1:4]$feats,
+#             point_shape = 'border', point_border_stroke = 0.1,
+#             show_network = F, network_color = 'lightgrey', point_size = 2.5,
+#             cow_n_col = 2)
+```
+
+```{r}
+## spatial co-expression patterns ##
+ext_spatial_genes = km_spatialfeats[1:500]$feats
+## 1. calculate gene spatial correlation and single-cell correlation
+## create spatial correlation object
+spat_cor_netw_DT = detectSpatialCorFeats(SS_seqfish,
+                                         method = 'network',
+                                         spatial_network_name = 'Delaunay_network',
+                                         subset_feats = ext_spatial_genes)
+## 2. cluster correlated genes & visualize
+spat_cor_netw_DT = clusterSpatialCorFeats(spat_cor_netw_DT,
+                                          name = 'spat_netw_clus',
+                                          k = 8)
+heatmSpatialCorFeats(SS_seqfish, spatCorObject = spat_cor_netw_DT, use_clus_name = 'spat_netw_clus',
+                     heatmap_legend_param = list(title = NULL))
+```
+
+```{r}
+# 3. rank spatial correlated clusters and show genes for selected clusters
+netw_ranks = rankSpatialCorGroups(SS_seqfish,
+                                  spatCorObject = spat_cor_netw_DT,
+                                  use_clus_name = 'spat_netw_clus')
+top_netw_spat_cluster = showSpatialCorFeats(spat_cor_netw_DT,
+                                            use_clus_name = 'spat_netw_clus',
+                                            selected_clusters = 6,
+                                            show_top_feats = 1)
+```
+
+```{r}
+# 4. create metagene enrichment score for clusters
+cluster_genes_DT = showSpatialCorFeats(spat_cor_netw_DT,
+                                       use_clus_name = 'spat_netw_clus',
+                                       show_top_feats = 1)
+cluster_genes = cluster_genes_DT$clus; names(cluster_genes) = cluster_genes_DT$feat_ID
+SS_seqfish = createMetafeats(SS_seqfish,
+                             feat_clusters = cluster_genes,
+                             name = 'cluster_metagene')
+spatCellPlot(SS_seqfish,
+             spat_enr_names = 'cluster_metagene',
+             cell_annotation_values = netw_ranks$clusters,
+             point_size = 1.5, cow_n_col = 3)
+```
+
+```{r}
+hmrf_folder = paste0(my_working_dir,'','11_HMRF')
+if(!file.exists(hmrf_folder)) dir.create(hmrf_folder, recursive = T)
+my_spatial_genes = km_spatialfeats[1:100]$feats
+# do HMRF with different betas
+HMRF_spatial_genes = doHMRF(gobject = SS_seqfish,
+                            expression_values = 'scaled',
+                            spatial_genes = my_spatial_genes,
+                            spatial_network_name = 'Delaunay_network',
+                            k = 9,
+                            betas = c(28,2,3),
+                            output_folder = paste0(hmrf_folder, '/', 'Spatial_genes/SG_top100_k9_scaled'))
+## view results of HMRF
+for(i in seq(28, 32, by = 2)) {
+  viewHMRFresults2D(gobject = SS_seqfish,
+                    HMRFoutput = HMRF_spatial_genes,
+                    k = 9, betas_to_view = i,
+                    point_size = 2)
+}
+## add HMRF of interest to giotto object
+SS_seqfish = addHMRF(gobject = SS_seqfish,
+                     HMRFoutput = HMRF_spatial_genes,
+                     k = 9, betas_to_add = c(28),
+                     hmrf_name = 'HMRF_2')
+
+
+## visualize
+#spatPlot(gobject = SS_seqfish,
+#         cell_color = 'HMRF_2_k9_b.28',        #'HMRF_2_k9_b.28',
+#         point_size = 3,
+#         coord_fix_ratio = 1)
+```
+
+```{r}
+
+```
+
+```{r}
+# List all names of the elements in the object
+names(SS_seqfish)
+```
+
+```{r}
+# Check if the slot cell_metadata exists and is not null
+if (!is.null(slot(SS_seqfish, "cell_metadata"))) {
+    # Access the 'cell' data from the cell_metadata list
+    cell_metadata_list = slot(SS_seqfish, "cell_metadata")
+    if ("cell" %in% names(cell_metadata_list)) {
+        # Now access the 'rna' structure directly as it might be an S4 object under 'cell'
+        rna_metadata = cell_metadata_list$cell$rna
+        # Check if 'HMRF_2_k9_b.28' exists in the metadata column names
+        if (!is.null(rna_metadata) && "HMRF_2_k9_b.28" %in% colnames(rna_metadata@metaDT)) {
+            print("HMRF results are present in the object.")
+        } else {
+            print("HMRF results are NOT found in the object.")
+        }
+    } else {
+        print("Cell data is not found in the cell_metadata.")
+    }
+} else {
+    print("The slot for cell_metadata does not exist in the object.")
+}
+```
+
+We now know there are HMRF results present, in the "cell_metadata" section of the giotto object.
+
+```{r}
+# Access the cell_metadata slot
+cell_metadata_list = slot(SS_seqfish, "cell_metadata")
+
+# Assuming the HMRF results are stored under 'cell' then 'rna'
+rna_metadata = cell_metadata_list$cell$rna
+
+# Print column names of the metadata data table to find HMRF-related fields
+print(colnames(rna_metadata@metaDT))
+
+```
+
+```{r}
+# Access the HMRF_2_k9_b.28 column from the rna_metadata
+hmrf_results = rna_metadata@metaDT$`HMRF_2_k9_b.28`
+
+# Print the contents of the HMRF_2_k9_b.28 column
+print(hmrf_results)
+
+```
+
+```{r}
+# Check if HMRF results are present
+if("HMRF_2" %in% names(SS_seqfish)) {
+    print("HMRF results are present in the object.")
+} else {
+    print("HMRF results are NOT found in the object.")
+}
+```
+
+```{r}
+## visualize
+spatPlot(gobject = SS_seqfish,
+         cell_color = 'HMRF_2_k9_b.28',        #'HMRF_2_k9_b.28',
+         point_size = 3,
+         coord_fix_ratio = 1)
+```
