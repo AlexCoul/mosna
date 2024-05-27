@@ -33,7 +33,7 @@ from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
 import composition_stats as cs
 import igraph as ig
-import scanorama
+# import scanorama
 import colorcet as cc
 import re
 from typing import Optional, Any, List, Tuple, Union, Iterable, Callable, Dict, Set
@@ -45,21 +45,21 @@ import dask
 
 from tysserand import tysserand as ty
 
-try:
-    import cupy as cp
-    import cugraph
-    import cudf
-    from cuml import UMAP
-    from cuml import HDBSCAN
-    from cuml.cluster.hdbscan import all_points_membership_vectors
-    gpu_clustering = True
-except:
-    from umap import UMAP
-    from hdbscan import HDBSCAN
-    from hdbscan import all_points_membership_vectors
-    import leidenalg as la
-    gpu_clustering = False
-from pycave.bayes import GaussianMixture
+# try:
+#     import cupy as cp
+#     import cugraph
+#     import cudf
+#     from cuml import UMAP
+#     from cuml import HDBSCAN
+#     from cuml.cluster.hdbscan import all_points_membership_vectors
+#     gpu_clustering = True
+# except:
+from umap import UMAP
+# from hdbscan import HDBSCAN
+# from hdbscan import all_points_membership_vectors
+import leidenalg as la
+gpu_clustering = False
+# from pycave.bayes import GaussianMixture
 
 
 
