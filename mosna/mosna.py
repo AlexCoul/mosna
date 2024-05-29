@@ -3991,6 +3991,10 @@ def plot_clusters(embed_viz,
     if cluster_labels is not None:
         for clust_id in uniq_clusters:
             select = cluster_labels == clust_id
+            print('embed_viz',embed_viz.shape)
+            print('select',select)
+            print('select.value_counts' , select.value_counts())
+
             plt.scatter(embed_viz[select, 0], embed_viz[select, 1], 
                         c=labels_color_mapper[clust_id], marker='.',
                         label=clust_id);
