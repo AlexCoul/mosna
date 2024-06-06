@@ -33,7 +33,7 @@ from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
 import composition_stats as cs
 import igraph as ig
-# import scanorama
+import scanorama
 import colorcet as cc
 import re
 from typing import Optional, Any, List, Tuple, Union, Iterable, Callable, Dict, Set
@@ -503,6 +503,7 @@ def batch_correct_nodes_agg(
     variable_names = [use_cols for _ in uniq_keys]
 
     # perform batch correction
+    import scanorama
     dimred = min(max_dimred, len(use_cols))
     corrected, _ = scanorama.correct(
         datasets, 
@@ -637,6 +638,7 @@ def batch_correct_nodes(
                         )
 
     if force_recompute:
+        import scanorama
         nodes_agg_corr = batch_correct_nodes_agg(
             nodes_agg=nodes_agg,
             batch_key=batch_key,
@@ -2978,6 +2980,7 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
                  xlabels_rotation=30, ax=None, return_data=False):
 
     data = data.copy(deep=True)
+    display(data.sample(3))
     if obs_labels is not None:
         data.index = data[obs_labels]
         data.drop(columns=[obs_labels], inplace=True)
@@ -3423,6 +3426,7 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
         if verbose > 0: 
             print("Computing dimensionality reduction")
         if reducer_type == 'umap':
+            n_neighbors = int(n_neighbors)
             reducer = UMAP(
                 random_state=random_state,
                 n_components=n_components,
@@ -3431,6 +3435,7 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
                 min_dist=min_dist,
                 )
             if isinstance(data, pd.DataFrame):
+
                 embedding = reducer.fit_transform(data.values)
             else:
                 embedding = reducer.fit_transform(data)
@@ -3536,7 +3541,13 @@ def get_clusterer(
     >>> data = np.random.rand(800, 4)
     >>> cluster_labels, cluster_dir, nb_clust, G = get_clusterer(data, "test")
     """
-
+    n_neighbors = int(n_neighbors)
+    dim_clust = int(dim_clust)
+    min_dist = float(min_dist)
+    resolution_parameter = float(resolution_parameter)
+    resolution_parameter = float(resolution_parameter)
+    
+    
     # API compatibility
     if resolution_parameter is not None:
         resolution = resolution_parameter
@@ -3551,6 +3562,7 @@ def get_clusterer(
                 n_clusters = 10
     reducer_name = make_reducer_name(reducer_type, dim_clust, n_neighbors, metric, min_dist)
     reducer_dir = Path(save_dir) / reducer_name
+    k_cluster = int(k_cluster)
     if avoid_neigh_overflow and k_cluster > n_neighbors:
         if verbose > 0:
             print('setting k_cluster = {k_cluster} to n_neighbors: {n_neighbors}')
@@ -3993,7 +4005,8 @@ def plot_clusters(embed_viz,
             select = cluster_labels == clust_id
             print('embed_viz',embed_viz.shape)
             print('select',select)
-            print('select.value_counts' , select.value_counts())
+            fig.set_dpi(30)
+            # print('select.value_counts' , select.value_counts())
 
             plt.scatter(embed_viz[select, 0], embed_viz[select, 1], 
                         c=labels_color_mapper[clust_id], marker='.',
@@ -4523,3 +4536,215 @@ def make_risk_ratio_matrix(data, y_name=None, y_values=None, rows=None, columns=
     rr_sig = (rr_low > 1) | (rr_high < 1)
     
     return rr, rr_low, rr_high, rr_sig
+
+
+
+
+def neighbors(pairs, n):
+    """
+    Return the list of neighbors of a node in a network defined 
+    by edges between pairs of nodes. 
+    
+    Parameters
+    ----------
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    n : int
+        The node for which we look for the neighbors.
+        
+    Returns
+    -------
+    neigh : array_like
+        The indices of neighboring nodes.
+    """
+    
+    left_neigh = pairs[pairs[:,1] == n, 0]
+    right_neigh = pairs[pairs[:,0] == n, 1]
+    neigh = np.hstack( (left_neigh, right_neigh) ).flatten()
+    
+    return neigh
+
+def neighbors_k_order(pairs, n, order):
+    """
+    Return the list of up the kth neighbors of a node 
+    in a network defined by edges between pairs of nodes
+    
+    Parameters
+    ----------
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    n : int
+        The node for which we look for the neighbors.
+    order : int
+        Max order of neighbors.
+        
+    Returns
+    -------
+    all_neigh : list
+        The list of lists of 1D array neighbor and the corresponding order
+    
+    
+    Examples
+    --------
+    >>> pairs = np.array([[0, 10],
+                        [0, 20],
+                        [0, 30],
+                        [10, 110],
+                        [10, 210],
+                        [10, 310],
+                        [20, 120],
+                        [20, 220],
+                        [20, 320],
+                        [30, 130],
+                        [30, 230],
+                        [30, 330],
+                        [10, 20],
+                        [20, 30],
+                        [30, 10],
+                        [310, 120],
+                        [320, 130],
+                        [330, 110]])
+    >>> neighbors_k_order(pairs, 0, 2)
+    [[array([0]), 0],
+     [array([10, 20, 30]), 1],
+     [array([110, 120, 130, 210, 220, 230, 310, 320, 330]), 2]]
+    """
+    
+    # all_neigh stores all the unique neighbors and their oder
+    all_neigh = [[np.array([n]), 0]]
+    unique_neigh = np.array([n])
+    
+    for k in range(order):
+        # detected neighbor nodes at the previous order
+        last_neigh = all_neigh[k][0]
+        k_neigh = []
+        for node in last_neigh:
+            # aggregate arrays of neighbors for each previous order neighbor
+            neigh = np.unique(neighbors(pairs, node))
+            k_neigh.append(neigh)
+        # aggregate all unique kth order neighbors
+        if len(k_neigh) > 0:
+            k_unique_neigh = np.unique(np.concatenate(k_neigh, axis=0))
+            # select the kth order neighbors that have never been detected in previous orders
+            keep_neigh = np.in1d(k_unique_neigh, unique_neigh, invert=True)
+            k_unique_neigh = k_unique_neigh[keep_neigh]
+            # register the kth order unique neighbors along with their order
+            all_neigh.append([k_unique_neigh, k+1])
+            # update array of unique detected neighbors
+            unique_neigh = np.concatenate([unique_neigh, k_unique_neigh], axis=0)
+        else:
+            break
+        
+    return all_neigh
+
+def flatten_neighbors(all_neigh):
+    """
+    Convert the list of neighbors 1D arrays with their order into
+    a single 1D array of neighbors.
+
+    Parameters
+    ----------
+    all_neigh : list
+        The list of lists of 1D array neighbor and the corresponding order.
+
+    Returns
+    -------
+    flat_neigh : array_like
+        The indices of neighboring nodes.
+        
+    Examples
+    --------
+    >>> all_neigh = [[np.array([0]), 0],
+                     [np.array([10, 20, 30]), 1],
+                     [np.array([110, 120, 130, 210, 220, 230, 310, 320, 330]), 2]]
+    >>> flatten_neighbors(all_neigh)
+    array([  0,  10,  20,  30, 110, 120, 130, 210, 220, 230, 310, 320, 330])
+        
+    Notes
+    -----
+    For future features it should return a 2D array of
+    nodes and their respective order.
+    """
+    
+    list_neigh = []
+    for neigh, order in all_neigh:
+        list_neigh.append(neigh)
+    flat_neigh = np.concatenate(list_neigh, axis=0)
+
+    return flat_neigh
+
+def aggregate_k_neighbors(X, pairs, order=1, var_names=None, stat_funcs='default', stat_names='default', var_sep=' '):
+    """
+    Compute the statistics on aggregated variables across
+    the k order neighbors of each node in a network.
+
+    Parameters
+    ----------
+    X : array_like
+        The data on which to compute statistics (mean, std, ...).
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    order : int
+        Max order of neighbors.
+    var_names : list
+        Names of variables of X.
+    stat_funcs : str or list of functions
+        Statistics functions to use on aggregated data. If 'default' np.mean and np.std are use.
+        All functions are used with the `axis=0` argument.
+    stat_names : str or list of str
+        Names of the statistical functions used on aggregated data.
+        If 'default' 'mean' and 'std' are used.
+    var_sep : str
+        Separation between variables names and statistical functions names
+        Default is ' '.
+
+    Returns
+    -------
+    aggreg : dataframe
+        Neighbors Aggregation Statistics of X.
+        
+    Examples
+    --------
+    >>> x = np.arange(5)
+    >>> X = x[np.newaxis,:] + x[:,np.newaxis] * 10
+    >>> pairs = np.array([[0, 1],
+                          [2, 3],
+                          [3, 4]])
+    >>> aggreg = aggregate_k_neighbors(X, pairs, stat_funcs=[np.mean, np.max], stat_names=['mean', 'max'], var_sep=' - ')
+    >>> aggreg.values
+    array([[ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
+           [ 5.,  6.,  7.,  8.,  9., 10., 11., 12., 13., 14.],
+           [25., 26., 27., 28., 29., 30., 31., 32., 33., 34.],
+           [30., 31., 32., 33., 34., 40., 41., 42., 43., 44.],
+           [35., 36., 37., 38., 39., 40., 41., 42., 43., 44.]])
+    """
+    
+    nb_obs = X.shape[0]
+    nb_var = X.shape[1]
+    if stat_funcs == 'default':
+        stat_funcs = [np.mean, np.std]
+        if stat_names == 'default':
+            stat_names = ['mean', 'std']
+    nb_funcs = len(stat_funcs)
+    aggreg = np.zeros((nb_obs, nb_var*nb_funcs))
+
+    # check if other info as source and target are in pairs and clean array
+    if pairs.shape[1] > 2:
+        print("Trimmimg additonnal columns in `pairs`")
+        pairs = pairs[:, :2].astype(int)
+    
+    for i in range(nb_obs):
+        all_neigh = neighbors_k_order(pairs, n=i, order=order)
+        neigh = flatten_neighbors(all_neigh)
+        for j, (stat_func, stat_name) in enumerate(zip(stat_funcs, stat_names)):
+            aggreg[i, j*nb_var : (j+1)*nb_var] = stat_func(X[neigh,:], axis=0)
+        
+    if var_names is None:
+        var_names = [str(i) for i in range(nb_var)]
+    columns = []
+    for stat_name in stat_names:
+        stat_str = var_sep + stat_name
+        columns = columns + [var + stat_str for var in var_names]
+    aggreg = pd.DataFrame(data=aggreg, columns=columns)
+    
+    return aggreg
