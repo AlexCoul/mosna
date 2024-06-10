@@ -55,8 +55,8 @@ print('imported')
 #     gpu_clustering = True
 # except:
 from umap import UMAP
-# from hdbscan import HDBSCAN
-# from hdbscan import all_points_membership_vectors
+from hdbscan import HDBSCAN
+from hdbscan import all_points_membership_vectors
 import leidenalg as la
 gpu_clustering = False
 # from pycave.bayes import GaussianMixture
