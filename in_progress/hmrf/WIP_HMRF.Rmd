@@ -106,3 +106,156 @@ g
 
 ## Make functions to export results stored in `HMRFoutput`
 
+
+```{r}
+#' @title get_niche_ids
+#' @name get_niche_ids
+#' @description Extract niche IDs from HMRF outputs
+#' @param HMRFoutput output of the doHMRF_V2 function
+#' @returns Creates a list with k, beta and niche_IDs 
+get_niche_ids <- function(HMRFoutput) {
+
+  all_niches = list()
+  # iterate over k and betas
+  
+    for k and betas...{
+      # get array of most likely niches ID for each cell
+       niche = list(k = k, beta = beta, niche_id = niche_id)
+       all_niches.append(niche)
+    }
+ 
+  return(all_niches)
+}
+```
+
+
+
+
+## Make a Giotto object just from coordinates and markers levels (and network if possible)
+
+```{r}
+library(Giotto)
+# installGiottoEnvironment()
+
+library(dplyr)
+library(tibble)
+library(readxl)
+library(data.table)
+library(ggplot2)
+
+
+phillips = as.data.table(read_xlsx('./41467_2021_26974_MOESM3_ESM_-_Objects.xlsx'))
+head(phillips)
+
+my_working_dir = './phillips_output/'
+# Code Block 3 - Set Giotto instructions
+
+#  set Giotto instructions
+instrs = createGiottoInstructions(save_plot = FALSE,
+                                  show_plot = TRUE,
+                                  save_dir = my_working_dir,
+                                  python_path = NULL)
+
+# Subset Phillips ####
+marker_col_names = c('FOXP3', 'GATA3', 'MUC-1', 'Vimentin', 'T-bet', 'CD62L', 'Cytokeratin', 'PD-L1', 'Ki-67', 'CD15', 'CD30', 'CD2', 'GranzymeB', 'CD5', 'CD39', 'MMP9', 'CD4', 'LAG3', 'CD25', 'CD56', 'CD20', 'PD-1', 'CD11c', 'CLA-CD162', 'IDO-1', 'VISTA', 'HLA-DR', 'ICOS', 'BCL-2', 'CD3', 'CD69', 'CD8', 'CD7', 'CD45RA', 'CD45', 'CD1a', 'CD57', 'B-catenin', 'CD45RO', 'CD71', 'CD34', 'CD68', 'CD38', 'CollagenIV', 'CD31', 'Podoplanin', 'CD138', 'CD163', 'Mastcell-tryptase', 'MMP12', 'CD164', 'p53', 'CCR6', 'CD16', 'CD11b', 'CCR4', 'EGFR', 'HOECHST1:Cyc_1_ch_1', 'DRAQ5')
+coord_col_names = c('X', 'Y')
+meta_names = c("Count",'ClusterName', "FileName", "Patients") # FileName = sample ClusterName = cell types
+
+# create file with offset information
+my_offset_file = data.table::data.table(sample = unique(phillips$FileName),
+                                        x_offset = 5000*seq(0, length(unique(phillips$FileName))),
+                                        y_offset = rep(0, length(unique(phillips$FileName))))
+
+# Shuffling the x_offset Column
+my_offset_file$x_offset = sample(my_offset_file$x_offset)
+# create a stitched image
+my_offset_file <- as.data.table(my_offset_file)
+
+phillips[my_offset_file, on = .(FileName = sample), X := X + i.x_offset]
+
+
+# subset phillips to create Giotto object
+t_expr = as.data.frame(t(column_to_rownames(phillips[, c("Count", ..marker_col_names)], var = "Count"))) 
+
+expr = as.data.table(rownames_to_column(t_expr, var = "markers"))
+
+setnames(expr, names(expr), as.character(names(expr)))
+
+coord = as.data.table(phillips[, c(..coord_col_names, "Count")]) 
+colnames(coord) = c("sdimx", "sdimy", "Count") 
+coord[, Count := as.character(Count)] 
+
+meta = as.data.table(phillips[, ..meta_names])
+meta[, Count := as.character(Count)] 
+
+
+giotto = createGiottoObject(expression = expr,
+                            expression_matrix_class = "custom",
+                            expression_feat = "protein",
+                            spatial_locs = coord,
+                            instructions = instrs,
+                            offset_file = my_offset_file)
+
+giotto = addCellMetadata(gobject = giotto,
+                         new_metadata = meta,
+                         by_column = T,
+                         column_cell_ID = "Count")
+
+giotto <- createSpatialGrid(gobject = giotto,
+                            sdimx_stepsize = 500,
+                            sdimy_stepsize = 500,
+                            minimum_padding = 50)
+
+spatPlot(gobject = giotto, show_grid = T, point_size = 1.5)
+
+
+giotto = createSpatialNetwork(gobject = giotto, minimum_k = 2, maximum_distance_delaunay = 400)
+
+giotto <- createSpatialNetwork(gobject = giotto, method = 'kNN', k = 5, name = 'spatial_network')
+
+network = giotto@spatial_network[["cell"]][["Delaunay_network"]]@networkDT
+
+giotto = binSpect(giotto, return_gobject = TRUE, expression_values = "raw")
+
+giotto <- runPCA(gobject = giotto, feats_to_use = "all_genes", scale_unit = F, center = F, expression_values = "raw")
+screePlot(giotto)
+plotPCA(giotto)
+
+giotto <- runUMAP(giotto, dimensions_to_use = 1:15, n_threads = 10, expression_values = "raw")
+
+giotto <- runtSNE(giotto, dimensions_to_use = 1:15, expression_values = "raw")
+
+giotto <- createNearestNetwork(
+  gobject = giotto, 
+  dim_reduction_to_use = "umap",  # "umap" as it is the reduction method
+  spat_unit = "cell", 
+  feat_type = "protein", 
+  dim_reduction_name = "protein.umap",  # Exact name in your object
+  k = 10
+)
+
+
+giotto <- doLeidenCluster(
+  gobject = giotto,
+  nn_network_to_use = "sNN",  # The network type to use
+  spat_unit = "cell", 
+  feat_type = "protein", 
+  network_name = "sNN.umap",  # The exact name of the network created
+  resolution = 0.4,
+  n_iterations = 1000
+)
+
+HMRF_init_obj <- initHMRF_V2(gobject = giotto, cl.method = "km",
+                             expression_values = "raw",
+                             # use_spatial_genes = my_spatial_genes,
+                             # spatial_network_name = 'Delaunay_network',
+                             spat_unit = "cell", 
+                             feat_type = "protein",
+                             k = 10)
+```
+
+
+
+
+
+
