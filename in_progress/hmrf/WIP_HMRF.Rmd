@@ -1,0 +1,108 @@
+### Test running HMRF method
+
+# Ensure GiottoData, a small, helper module for tutorials, is installed.
+```{r}
+if(!"GiottoData" %in% installed.packages()) {
+  pak::pkg_install("drieslab/GiottoData")
+}
+```
+
+```{r}
+library(Giotto)
+library(GiottoData)
+```
+
+Example from the documentation:
+```{r}
+g <- GiottoData::loadGiottoMini("visium")
+g <- binSpect(g, return_gobject = TRUE)
+HMRF_init_obj <- initHMRF_V2(gobject = g, cl.method = "km")
+
+HMRFoutput <- doHMRF_V2(HMRF_init_obj = HMRF_init_obj, betas = c(0, 5, 2))
+```
+
+```{r}
+# hmrf_name='hmrf1'
+# hmrf_name='HMRFoutput'
+# hmrf_name='V1'
+viewHMRFresults_V2(gobject=g, k=10, betas=c(0.00, 5.00), hmrf_name='hmrf', save_plot=False)
+```
+It appears `viewHMRFresults_V2è doesn't add the results correctly to the Giotto object.
+
+```{r}
+addHMRF_V2 <- function(gobject, HMRFoutput, name = "hmrf") {
+    if (!"HMRFoutput" %in% class(HMRFoutput)) {
+        stop("HMRFoutput needs to be output from doHMRF_V2()")
+    }
+    if (!"spat_unit" %in% names(HMRFoutput)) {
+        HMRFoutput[["spat_unit"]] <- NULL
+    }
+    if (!"feat_type" %in% names(HMRFoutput)) {
+        HMRFoutput[["feat_type"]] <- NULL
+    }
+    spat_unit <- HMRFoutput$spat_unit
+    feat_type <- HMRFoutput$feat_type
+
+    cx <- getCellMetadata(
+        gobject,
+        spat_unit = spat_unit,
+        feat_type = feat_type,
+        output = "data.table",
+        copy_obj = TRUE
+    )
+    ordered_cell_IDs <- cx$cell_ID
+
+    for (i in seq_along(grep("k", names(HMRFoutput)))) {
+        print(paste('i:', i))
+        print(paste('name:', name))
+        print(paste('names(HMRFoutput)[i]:', names(HMRFoutput)[i]))
+        gobject <- addCellMetadata(
+            gobject = gobject,
+            spat_unit = spat_unit,
+            feat_type = feat_type,
+            column_cell_ID = "cell_ID",
+            # new_metadata = HMRFoutput[[i]]$class[match(
+            #     ordered_cell_IDs, names(HMRFoutput[[i]]$class))],
+            new_metadata = HMRFoutput[[i]]$prob[ordered_cell_IDs,],
+            vector_name = paste(name, names(HMRFoutput)[i])
+            #by_column = TRUE
+        )
+    }
+    return(gobject)
+}
+```
+
+```{r}
+g@cell_ID
+```
+
+```{r}
+g <- addHMRF_V2(gobject = g, HMRFoutput = HMRFoutput)
+```
+
+
+
+```{r}
+g@cell_metadata$cell$rna@metaDT$leiden_clus
+```
+
+```{r}
+g@cell_metadata$cell$rna@metaDT$custom_leiden
+```
+
+```{r}
+g@cell_metadata$cell$rna@metaDT$V1
+```
+
+```{r}
+colnames(combineMetadata(
+            gobject = g, spat_unit = NULL, feat_type = NULL))
+```
+
+```{r}
+g
+```
+
+
+## Make functions to export results stored in `HMRFoutput`
+
