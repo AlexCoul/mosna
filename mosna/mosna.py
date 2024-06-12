@@ -1761,6 +1761,47 @@ def make_features_SCANIT(
         return scanit_features
 
 
+def make_niches_HMRF(
+    X: np.array = None, 
+    coords: np.array = None, 
+    pairs: np.array = None, 
+    var_names: Union[Iterable[str], None] = None,
+    k: int = 10,
+    betas: list[int] = None,
+    ) -> pd.DataFrame:
+    """
+    Compute niche IDs vector of each node in a network
+    given the  hidden Markov random field (HMRF) method
+    from the Giotto R package.
+
+    Parameters
+    ----------
+    X : array_like
+        Nodes' attributes on which features are computed.
+    coords : array_like
+        Coordinates of cells.
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    var_names : list
+        Names of variables of X.
+    k : int, 10
+        Number of niches to find.
+    betas : list[int]
+        beta value of the HMRF model, controlling the smoothness of
+        clustering. If None default values are used based on feature
+        numbers, otherwise, a vector of three values: initial beta, 
+        beta increment, and number of betas
+
+    Returns
+    -------
+    feats : dataframe
+        Features computed with the HMRF method.
+    """
+
+    if betas is None:
+        betas = 'NULL'
+
+
 def compute_spatial_omic_features_single_network(
     method: str = 'NAS',
     net_dir: Union[str, Path] = None,  
@@ -2087,6 +2128,47 @@ def compute_spatial_omic_features_all_networks(
                 nas = delayed(pd.concat)(groups_data, axis=0, ignore_index=True).compute()
 
     return nas
+
+
+def make_niches_HMRF(
+    X: np.array = None, 
+    coords: np.array = None, 
+    pairs: np.array = None, 
+    var_names: Union[Iterable[str], None] = None,
+    k: int = 10,
+    betas: list[int] = None,
+    ) -> pd.DataFrame:
+    """
+    Compute niche IDs vector of each node in a network
+    given the  hidden Markov random field (HMRF) method
+    from the Giotto R package.
+
+    Parameters
+    ----------
+    X : array_like
+        Nodes' attributes on which features are computed.
+    coords : array_like
+        Coordinates of cells.
+    pairs : array_like
+        Pairs of nodes' id that define the network's edges.
+    var_names : list
+        Names of variables of X.
+    k : int, 10
+        Number of niches to find.
+    betas : list[int]
+        beta value of the HMRF model, controlling the smoothness of
+        clustering. If None default values are used based on feature
+        numbers, otherwise, a vector of three values: initial beta, 
+        beta increment, and number of betas
+
+    Returns
+    -------
+    feats : dataframe
+        Features computed with the HMRF method.
+    """
+
+    if betas is None:
+        betas = 'NULL'
 
 
 
