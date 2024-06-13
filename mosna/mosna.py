@@ -44,7 +44,6 @@ from dask import delayed
 import dask
 
 from tysserand import tysserand as ty
-print('imported')
 # try:
 #     import cupy as cp
 #     import cugraph
@@ -3454,9 +3453,20 @@ def make_reducer_name(
     return reducer_name
 
 
-def get_reducer(data, save_dir, reducer_type='umap', n_components=2, 
-                n_neighbors=15, metric='manhattan', min_dist=0.0, force_recompute=False, 
-                save_reducer=False, random_state=None, verbose=1):
+def get_reducer(
+    data, 
+    save_dir, 
+    reducer_type='umap', 
+    n_components=2, 
+    n_neighbors=15, 
+    metric='manhattan', 
+    min_dist=0.0, 
+    force_recompute=False,
+    save_reduced_coords=True, 
+    save_reducer=False, 
+    random_state=None, 
+    verbose=1,
+    ):
     """
     Generate or load a dimensionality reduction (DR) model and transformed (reduced) data.
 
@@ -3528,9 +3538,10 @@ def get_reducer(data, save_dir, reducer_type='umap', n_components=2,
             else:
                 embedding = data
 
-        # save reduced coordinates
-        save_dir.mkdir(parents=True, exist_ok=True)
-        np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
+        if save_reduced_coords:
+            # save reduced coordinates
+            save_dir.mkdir(parents=True, exist_ok=True)
+            np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
         if save_reducer:
             # save the reducer object
             joblib.dump(reducer, str(save_dir / "reducer") + '.pkl')
@@ -4085,11 +4096,6 @@ def plot_clusters(embed_viz,
     if cluster_labels is not None:
         for clust_id in uniq_clusters:
             select = cluster_labels == clust_id
-            print('embed_viz',embed_viz.shape)
-            print('select',select)
-            fig.set_dpi(30)
-            # print('select.value_counts' , select.value_counts())
-
             plt.scatter(embed_viz[select, 0], embed_viz[select, 1], 
                         c=labels_color_mapper[clust_id], marker='.',
                         label=clust_id);
