@@ -3061,7 +3061,7 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
                  xlabels_rotation=30, ax=None, return_data=False):
 
     data = data.copy(deep=True)
-    display(data.sample(3))
+    # display(data.sample(3))
     if obs_labels is not None:
         data.index = data[obs_labels]
         data.drop(columns=[obs_labels], inplace=True)
@@ -3636,13 +3636,11 @@ def get_clusterer(
     """
     n_neighbors = int(n_neighbors)
     dim_clust = int(dim_clust)
-    min_dist = float(min_dist)
-    resolution_parameter = float(resolution_parameter)
-    resolution_parameter = float(resolution_parameter)
-    
+    min_dist = float(min_dist)          
     
     # API compatibility
     if resolution_parameter is not None:
+        resolution_parameter = float(resolution_parameter)  
         resolution = resolution_parameter
 
     if flavor is not None:
