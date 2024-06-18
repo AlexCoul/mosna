@@ -2960,10 +2960,29 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude
     return pvals
 
 
-def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='pval_corr', pval_thresh=0.05, test='Mann-Whitney',
-                        max_cols=-1, exclude_vars=None, id_vars=None, var_name='variable', value_name='value', 
-                        multi_ind_to_col=False, figsize=(20, 6), fontsize=20, orientation=30, ax=None,
-                        plot_type='boxplot', add_points=True):
+def plot_distrib_groups(
+    data, 
+    group_var, 
+    groups=None,
+    pval_data=None, 
+    pval_col='pval_corr', 
+    pval_thresh=0.05, 
+    test='Mann-Whitney',
+    max_cols=-1, 
+    exclude_vars=None, 
+    id_vars=None, 
+    var_name='variable', 
+    value_name='value', 
+    group_names=None,
+    multi_ind_to_col=False, 
+    figsize=(20, 6), 
+    fontsize=20, 
+    orientation=30, 
+    legend_opt=None,
+    ax=None,
+    plot_type='boxplot', 
+    add_points=True,
+    ):
     """
     Plot the distribution of variables by groups.
     """
@@ -3048,17 +3067,48 @@ def plot_distrib_groups(data, group_var, groups=None, pval_data=None, pval_col='
                       dodge=True, size=4, palette='dark:.3', legend=None);
     plt.xticks(rotation=orientation, ha='right', fontsize=fontsize);
     plt.yticks(fontsize=fontsize);
+    if group_names is not None:
+        handles, previous_labels = ax.get_legend_handles_labels()
+        try:
+            new_labels = [group_names[x] for x in previous_labels]
+        except KeyError:
+            # keys and groups types are different, like str vs int
+            to_type = type(previous_labels[0])
+            # convert key types
+            group_names = {to_type(key): val for key, val in group_names.items()}
+            new_labels = [group_names[x] for x in previous_labels]
+        ax.legend(handles=handles, labels=new_labels)
     if ax_none:
         return fig, ax
 
 
-def plot_heatmap(data, obs_labels=None, group_var=None, groups=None, 
-                 use_col=None, skip_cols=[], z_score=1, drop_unique=True, 
-                 cmap=None, center=None, row_cluster=True, col_cluster=True,
-                 palette=None, figsize=(10, 10), fontsize=10, 
-                 colors_ratio=0.03, dendrogram_ratio=0.2, cbar_kws=None,
-                 cbar_pos=(0.02, 0.8, 0.05, 0.18),
-                 xlabels_rotation=30, ax=None, return_data=False):
+def plot_heatmap(
+    data, 
+    obs_labels=None, 
+    group_var=None, 
+    groups=None, 
+    group_names=None,
+    use_col=None, 
+    skip_cols=[], 
+    z_score=1, 
+    drop_unique=True, 
+    cmap=None, 
+    center=None, 
+    row_cluster=True, 
+    col_cluster=True,
+    palette=None, 
+    figsize=(10, 10), 
+    fontsize=10, 
+    colors_ratio=0.03, 
+    dendrogram_ratio=0.2, 
+    cbar_kws=None,
+    cbar_pos=(0.02, 0.8, 0.05, 0.18),
+    legend_opt=None,
+    legend_markersize=15,
+    xlabels_rotation=30, 
+    ax=None, 
+    return_data=False,
+    ):
 
     data = data.copy(deep=True)
     # display(data.sample(3))
@@ -3099,7 +3149,6 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
         data.drop(columns=[group_var], inplace=True)
     else:
         colors = None
-    
     if cmap is None:
         if z_score is not None or (data.values.min() < 0 and data.values.max() > 0):
             cmap = sns.diverging_palette(230, 20, as_cmap=True)
@@ -3114,6 +3163,19 @@ def plot_heatmap(data, obs_labels=None, group_var=None, groups=None,
                        cbar_pos=cbar_pos, cbar_kws=cbar_kws)
     g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=fontsize);
+
+    if colors is not None:
+        all_markers = []
+        all_labels = []
+        for key, val in lut.items():
+            all_markers.append(mpl.lines.Line2D([], [], marker="s", markersize=legend_markersize, linewidth=0, color=val))
+            all_labels.append(key)
+        if group_names is not None:
+            all_labels = [group_names[x] for x in all_labels]
+        if legend_opt is None:
+            legend_opt = {'loc': 'lower right', 'bbox_to_anchor': (1.2, 1.1)}
+        g.ax_heatmap.legend(all_markers, all_labels, **legend_opt)
+
     if hasattr(g, 'ax_row_colors') and colors is not None:
         g.ax_row_colors.set_xticklabels(g.ax_row_colors.get_xticklabels(), rotation=xlabels_rotation, ha='right', fontsize=fontsize);
     if return_data:
