@@ -403,7 +403,7 @@ if RUN_LONG:
                                     
                                     var_aggreg_niches = var_aggreg_samples_info.copy()
                                     var_aggreg_niches['niche'] = np.array(niches)
-                                    counts = mosna.make_niches_composition(var_aggreg_niches['patient'], niches, var_label=patient_col, normalize=normalize)
+                                    counts = mosna.make_niches_composition(var_aggreg_niches[predict_key], niches, var_label=var_label, normalize=normalize)
                                     
                                     duration_col = 'yearsToStatus'
                                     event_col = 'DeathBreast'
@@ -412,7 +412,7 @@ if RUN_LONG:
                                     status = surv[[duration_col, event_col] + covariates]
 
                                     drop_nan = True
-                                    df_surv = counts.merge(status, how='inner', on=patient_col)
+                                    df_surv = counts.merge(status, how='inner', on=var_label)
                                     if drop_nan:
                                         n_obs_orig = len(df_surv)
                                         df_surv.dropna(axis=0, inplace=True)
