@@ -75,48 +75,46 @@ code_groups = {
 } 
 
 status_path = data_dir / "41467_2021_26974_MOESM5_ESM - Patients_spots_conditons.xlsx"
-status = pd.read_excel(status_path, skiprows=2, usecols=[patient_col, group_col, 'Spots'])
-# samples 5, 25, 36, 37, 40, 44 are missing
-# now inferred from updated data at https://static-content.springer.com/esm/art%3A10.1038%2Fs41467-021-26974-6/MediaObjects/41467_2021_26974_MOESM1_ESM.pdf
-updated_data = [
-    [2, 1, 5],
-    [7, 2, 25],
-    [9, 1, 36],
-    [9, 3, 37],
-    [10, 1, 40],
-    [11, 3, 44],
-    ]
-status = pd.concat([status, pd.DataFrame(updated_data, columns=status.columns)], axis=0)
+# status = pd.read_excel(status_path, skiprows=2, usecols=[patient_col, group_col, 'Spots'])
+# # samples 5, 25, 36, 37, 40, 44 are missing
+# # now inferred from updated data at https://static-content.springer.com/esm/art%3A10.1038%2Fs41467-021-26974-6/MediaObjects/41467_2021_26974_MOESM1_ESM.pdf
+# updated_data = [
+#     [2, 1, 5],
+#     [7, 2, 25],
+#     [9, 1, 36],
+#     [9, 3, 37],
+#     [10, 1, 40],
+#     [11, 3, 44],
+#     ]
+# status = pd.concat([status, pd.DataFrame(updated_data, columns=status.columns)], axis=0)
 
-status[sample_col] = status['Spots'].apply(lambda x: f'reg{x:03}')
-# pd.set_option('display.max_rows', 100)
+# status[sample_col] = status['Spots'].apply(lambda x: f'reg{x:03}')
+# # pd.set_option('display.max_rows', 100)
 
-if sample_col in status.columns:
-    status.index = status[sample_col]
-    status.drop(columns=[sample_col], inplace=True)
-    status.index.name = 'id'
-status.sort_values('Spots')
+# if sample_col in status.columns:
+#     status.index = status[sample_col]
+#     status.drop(columns=[sample_col], inplace=True)
+#     status.index.name = 'id'
+# status.sort_values('Spots')
 
-# if status has too many missing values
-# we can make a status dataframe from the 
-# objects dataframe, in the end they are identical
+# When status had too many missing values after first data release:
+# we make a status dataframe from the objects dataframe
 status = obj[[sample_col, patient_col, group_col, 'Count', 'Spots']].groupby([patient_col, group_col, 'Spots', sample_col]).count().reset_index()
 if sample_col in status.columns:
     status.index = status[sample_col]
     status.drop(columns=[sample_col], inplace=True)
-    status.index.name = 'id'
+    status.index.name = sample_col
 
 # Drop sample with too few cells
 # net_size_threshold = 300
 net_size_threshold = 0    # no filtering
 status = status.loc[status['Count'] >= net_size_threshold, :]
+status.sort_values('Spots')
 # status.drop(columns=['Count'], inplace=True)
 
 # update the `object` dataframe
 uniq_filenames = set(status.index)
 obj = obj.query("FileName in @uniq_filenames")
-
-# pd.set_option('display.max_rows', 100)
 
 
 survival_path = data_dir / "cohort_response.ods"
@@ -231,10 +229,17 @@ else:
         )
     var_aggreg.to_parquet(filename, index=False)
 
-
 # retrieve network info and remove it from NAS table
 var_aggreg_samples_info = var_aggreg[['patient', 'sample']]
 var_aggreg.drop(columns=['patient', 'sample'], inplace=True)
+
+# ------ Screen NAS parameters ------
+
+group_remapper = {2: 0, # non-responders
+                  1: 1} # responders
+group_cat_mapper = {0: 'Non-responder',
+                    1: 'Responder'}
+group_cat_mapper_rev = {val: key for key, val in group_cat_mapper.items()}
 
 
 # predict_key = 'patient'
@@ -243,16 +248,18 @@ group_col_cat = 'Response status'
 
 if predict_key == 'patient':
     var_label = patient_col
-    status = surv[[group_col_cat]]
-    status[group_col] = status[group_col_cat].map({'Responder': 1, 'Non-responder':0})
+    status_pred = surv[[group_col_cat]]
+    status_pred[group_col] = status_pred[group_col_cat].map(group_cat_mapper_rev)
 elif predict_key == 'sample':
     var_label = sample_col
-    # response status already defined per sample
+    status_pred = status.copy()
+    status_pred[group_col] = status_pred[group_col].map(group_remapper)
+    status_pred[group_col_cat] = status_pred[group_col].map(group_cat_mapper)
 
 
 #%% Define space of hyperparameters search
 
-plot_heatmap = False
+plot_heatmap = True
 plot_alphas = False
 plot_best_model_coefs = False
 train_model = True
@@ -296,6 +303,7 @@ if RUN_LONG:
     all_models = []
     # screen NAS parameters
     iter_dim_clust = [2, 3, 4, 5]
+    iter_dim_clust = [3, 4, 5]
     if show_progress:
         iter_dim_clust = tqdm(iter_dim_clust, leave=False)
     for dim_clust in iter_dim_clust:
@@ -361,115 +369,123 @@ if RUN_LONG:
                             
                             # Survival analysis (just heatmap for now)
                             niches = cluster_labels
-                            for normalize in ['total', 'niche', 'obs', 'clr', 'niche&obs']:
-                                str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
-                                str_params = str_params + f'_normalize-{normalize}'
+                            if n_clusters > 1:
+                                for normalize in ['total', 'niche', 'obs', 'clr', 'niche&obs']:
+                                    str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
+                                    str_params = str_params + f'_normalize-{normalize}'
 
-                                results_path = dir_save_interm / f'{str_params}.parquet'
-                                new_model = None
-                                if results_path.exists() and not recompute:
-                                    if verbose > 1:
-                                        print(f'load {results_path.stem}')
-                                    new_model = pd.read_parquet(results_path)
-                                else:
-                                    if train_model and n_clusters < 200:
+                                    results_path = dir_save_interm / f'{str_params}.parquet'
+                                    new_model = None
+                                    if results_path.exists() and not recompute:
                                         if verbose > 1:
-                                            print(f'compute {results_path.stem}')
-                                
-                                        var_aggreg_niches = var_aggreg_samples_info.copy()
-                                        var_aggreg_niches['niche'] = np.array(niches)
+                                            print(f'load {results_path.stem}')
+                                        new_model = pd.read_parquet(results_path)
+                                    else:
+                                        if train_model and n_clusters < 200:
+                                            if verbose > 1:
+                                                print(f'compute {results_path.stem}')
+                                    
+                                            var_aggreg_niches = var_aggreg_samples_info.copy()
+                                            var_aggreg_niches['niche'] = np.array(niches)
 
-                                        counts = mosna.make_niches_composition(var_aggreg_niches[predict_key], niches, var_label=var_label, normalize=normalize)
-                                        counts.index = counts.index.astype(status.index.dtype)
-                                        exo_vars = counts.columns.astype(str).tolist()
-                                        if predict_key == 'patient':
-                                            df_surv = counts.merge(status, how='inner', on=var_label)
-                                        elif predict_key == 'sample':
-                                            df_surv = pd.concat([status, counts], axis=1, join='inner').fillna(0)
-                                        df_surv.columns = df_surv.columns.astype(str)
-                                        df_surv.index.name = var_label
+                                            counts = mosna.make_niches_composition(var_aggreg_niches[predict_key], niches, var_label=var_label, normalize=normalize)
+                                            counts.index = counts.index.astype(status_pred.index.dtype)
+                                            exo_vars = counts.columns.astype(str).tolist()
+                                            df_surv = pd.concat([status_pred, counts], axis=1, join='inner').fillna(0)
+                                            # alternative aggregation
+                                            # df_surv = counts.merge(status_pred, how='inner', on=var_label) 
+                                            df_surv.columns = df_surv.columns.astype(str)
+                                            df_surv.index.name = var_label
 
-                                        # to model data, not to predict from it, do:
-                                        split_train_test = False
-                                        models = mosna.logistic_regression(
-                                            df_surv[exo_vars + [group_col]],
-                                            y_name=group_col,
-                                            col_drop=[var_label],
-                                            cv_train=cv_train, 
-                                            cv_adapt=cv_adapt, 
-                                            cv_max=cv_max,
-                                            plot_coefs=False,
-                                            split_train_test=split_train_test,
-                                            )
-                                        
-                                        score_roc_auc = np.nanmax([models[model_type]['score']['ROC AUC'] for model_type in models.keys()])
-                                        score_ap = np.nanmax([models[model_type]['score']['AP'] for model_type in models.keys()])
-                                        score_mcc = np.nanmax([models[model_type]['score']['MCC'] for model_type in models.keys()])
-                                        print(f'score_roc_auc: {score_roc_auc:.3f}')
-                                        
-                                        if score_roc_auc >= 0.7:
-                                        
-                                            best_id = np.argmax([models[model_type]['score']['ROC AUC'] for model_type in models.keys()])
-                                            l1_ratio = [models[model_type]['model'].l1_ratio_[0] for model_type in models.keys()][best_id]
-                                            alpha = [models[model_type]['model'].C_[0] for model_type in models.keys()][best_id]
-
-                                            if plot_heatmap:
-                                                # make folder to save figures
-                                                path_parts = cluster_dir.parts[-2:]
-                                                dir_save_figures = dir_save_interm
-                                                for part in path_parts:
-                                                    dir_save_figures = dir_save_figures / part
-                                                dir_save_figures.mkdir(parents=True, exist_ok=True)
-
-                                                try:
-                                                    g, d = mosna.plot_heatmap(
-                                                        df_surv[exo_vars + [group_col]].reset_index(), 
-                                                        obs_labels=var_label, 
-                                                        group_var=group_col, 
-                                                        groups=[0, 1],
-                                                        figsize=(10, 10),
-                                                        z_score=False,
-                                                        cmap=sns.color_palette("Reds", as_cmap=True),
-                                                        return_data=True,
-                                                        )
-                                                    figname = f"biclustering_{str_params}_roc_auc-{score_roc_auc:.3f}.jpg"
-                                                    plt.savefig(dir_save_figures / figname, dpi=150)
-                                                    # plt.show()
-                                                    plt.close()
-
-                                                    g, d = mosna.plot_heatmap(
-                                                        df_surv[exo_vars + [group_col]].reset_index(), 
-                                                        obs_labels=var_label, 
-                                                        group_var=group_col, 
-                                                        groups=[0, 1],
-                                                        figsize=(10, 10),
-                                                        z_score=1,
-                                                        cmap=sns.color_palette("Reds", as_cmap=True),
-                                                        return_data=True,
-                                                        )
-                                                    figname = f"biclustering_{str_params}_roc_auc-{score_roc_auc:.3f}_col_zscored.jpg"
-                                                    plt.savefig(dir_save_figures / figname, dpi=150)
-                                                    # plt.show()
-                                                    plt.close()
-                                                except:
-                                                    pass
+                                            # to model data, not to predict from it, do:
+                                            split_train_test = False
+                                            models = mosna.logistic_regression(
+                                                df_surv[exo_vars + [group_col]],
+                                                y_name=group_col,
+                                                col_drop=[var_label],
+                                                cv_train=cv_train, 
+                                                cv_adapt=cv_adapt, 
+                                                cv_max=cv_max,
+                                                plot_coefs=False,
+                                                split_train_test=split_train_test,
+                                                )
                                             
-                                            new_model = [dim_clust, n_neighbors, metric, clusterer_type, k_cluster, clust_size_param, n_clusters, normalize, l1_ratio, alpha, score_roc_auc, score_ap, score_mcc]
-                                    if new_model is None:
-                                        # not trained or training failed
-                                        new_model = [dim_clust, n_neighbors, metric, clusterer_type, k_cluster, clust_size_param, n_clusters, normalize, -1, -1, -1, -1, -1]
-                                    new_model = pd.DataFrame(data=np.array(new_model).reshape((1, -1)), columns=columns)
-                                    new_model = new_model.astype(col_types)
-                                    new_model.to_parquet(results_path)
-                                
-                                all_models.append(new_model.values)
-                            # except Exception as e:
-                            #     print(e)
+                                            score_roc_auc = np.nanmax([models[model_type]['score']['ROC AUC'] for model_type in models.keys()])
+                                            score_ap = np.nanmax([models[model_type]['score']['AP'] for model_type in models.keys()])
+                                            score_mcc = np.nanmax([models[model_type]['score']['MCC'] for model_type in models.keys()])
+                                            print(f'score_roc_auc: {score_roc_auc:.3f}')
+                                            
+                                            if score_roc_auc >= 0.7:
+                                            
+                                                best_id = np.argmax([models[model_type]['score']['ROC AUC'] for model_type in models.keys()])
+                                                l1_ratio = [models[model_type]['model'].l1_ratio_[0] for model_type in models.keys()][best_id]
+                                                alpha = [models[model_type]['model'].C_[0] for model_type in models.keys()][best_id]
+
+                                                if plot_heatmap:
+                                                    # make folder to save figures
+                                                    path_parts = cluster_dir.parts[-2:]
+                                                    dir_save_figures = dir_save_interm
+                                                    for part in path_parts:
+                                                        dir_save_figures = dir_save_figures / part
+                                                    dir_save_figures.mkdir(parents=True, exist_ok=True)
+
+                                                    try:
+                                                        g, d = mosna.plot_heatmap(
+                                                            # TODO: use group_col_cat instead?
+                                                            df_surv[exo_vars + [group_col]].reset_index(), 
+                                                            obs_labels=var_label, 
+                                                            group_var=group_col, 
+                                                            groups=[0, 1],
+                                                            group_names=group_cat_mapper,
+                                                            figsize=(10, 10),
+                                                            z_score=False,
+                                                            cmap=sns.color_palette("Reds", as_cmap=True),
+                                                            return_data=True,
+                                                            )
+                                                        figname = f"biclustering_{str_params}_roc_auc-{score_roc_auc:.3f}.jpg"
+                                                        plt.savefig(dir_save_figures / figname, dpi=150)
+                                                        plt.close()
+
+                                                        g, d = mosna.plot_heatmap(
+                                                            df_surv[exo_vars + [group_col]].reset_index(), 
+                                                            obs_labels=var_label, 
+                                                            group_var=group_col, 
+                                                            groups=[0, 1],
+                                                            group_names=group_cat_mapper,
+                                                            figsize=(10, 10),
+                                                            z_score=1,
+                                                            cmap=sns.color_palette("Reds", as_cmap=True),
+                                                            return_data=True,
+                                                            )
+                                                        figname = f"biclustering_{str_params}_roc_auc-{score_roc_auc:.3f}_col_zscored.jpg"
+                                                        plt.savefig(dir_save_figures / figname, dpi=150)
+                                                        plt.close()
+                                                    except:
+                                                        pass
+                                                
+                                                new_model = [dim_clust, n_neighbors, metric, clusterer_type, k_cluster, clust_size_param, n_clusters, normalize, l1_ratio, alpha, score_roc_auc, score_ap, score_mcc]
+                                        if new_model is None:
+                                            # not trained or training failed
+                                            new_model = [dim_clust, n_neighbors, metric, clusterer_type, k_cluster, clust_size_param, n_clusters, normalize, -1, -1, -1, -1, -1]
+                                        new_model = pd.DataFrame(data=np.array(new_model).reshape((1, -1)), columns=columns)
+                                        new_model = new_model.astype(col_types)
+                                        new_model.to_parquet(results_path)
+                                    
+                                    all_models.append(new_model.values)
+                                # except Exception as e:
+                                #     print(e)
     all_models = pd.DataFrame(all_models, columns=columns)
     all_models = all_models.astype(col_types)
     all_models.to_parquet(dir_save_interm / 'all_models.parquet')
     print('done')
 else:
-    print('Load NAS hyperparameters search results')
-    all_models = pd.read_parquet(dir_save_interm / 'all_models.parquet')
+    aggregated_file_path = dir_save_interm / 'all_models.parquet'
+    if aggregated_file_path.exists():
+        print('Load NAS hyperparameters search results')
+        all_models = pd.read_parquet()
+    else:
+        print('Aggregate NAS hyperparameters search results')
+        all_models = [pd.read_parquet(file_path) for file_path in dir_save_interm.glob('*.parquet')]
+        all_models = pd.concat(all_models, axis=0).astype(col_types)
+        all_models.index = np.arange(len(all_models))
 
