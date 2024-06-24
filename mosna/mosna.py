@@ -3109,6 +3109,21 @@ def plot_heatmap(
     ax=None, 
     return_data=False,
     ):
+    """
+    Paameters
+    ---------
+    data : pd.DataFrame
+        Table holding samples or patients clinical data and proportion
+        of cells in niches.
+    obs_labels : str, None
+        Column of patient or sample IDs.
+    group_var : str, None
+        Column of clinical group (like responder vs non-responder)
+    groups : Iterable, None
+        Values of group to use for plotting, other values are ignored.
+    group_names : dict, None
+        Labels to display for each group.
+    """
 
     data = data.copy(deep=True)
     # display(data.sample(3))
@@ -3799,7 +3814,7 @@ def get_clusterer(
                         )
                 else:
                     edges = pd.read_parquet(reduced_net_path)
-                    embedding_pairs = edges['src', 'dst'].values
+                    embedding_pairs = edges[['src', 'dst']].values
                     G = ty.to_iGraph(embedding, embedding_pairs)
             else:
                 # need to build knn graph
