@@ -409,10 +409,10 @@ if RUN_LONG:
                                     event_col = 'DeathBreast'
                                     covariates = [] # ['ERStatus'] #, 'ERBB2_pos'] # else []
                                     strata = None #'ERStatus'
-                                    status = surv[[duration_col, event_col] + covariates]
+                                    status_pred = surv[[duration_col, event_col] + covariates]
 
                                     drop_nan = True
-                                    df_surv = counts.merge(status, how='inner', on=var_label)
+                                    df_surv = counts.merge(status_pred, how='inner', on=var_label)
                                     if drop_nan:
                                         n_obs_orig = len(df_surv)
                                         df_surv.dropna(axis=0, inplace=True)

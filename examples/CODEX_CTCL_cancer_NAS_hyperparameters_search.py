@@ -242,8 +242,8 @@ group_cat_mapper = {0: 'Non-responder',
 group_cat_mapper_rev = {val: key for key, val in group_cat_mapper.items()}
 
 
-# predict_key = 'patient'
-predict_key = 'sample'
+predict_key = 'patient'
+# predict_key = 'sample'
 group_col_cat = 'Response status'
 
 if predict_key == 'patient':
@@ -265,6 +265,7 @@ plot_best_model_coefs = False
 train_model = True
 recompute = False
 verbose = 1
+min_cluster_pred = 3
 
 DEBUG = False
 if DEBUG:
@@ -369,7 +370,7 @@ if RUN_LONG:
                             
                             # Survival analysis (just heatmap for now)
                             niches = cluster_labels
-                            if n_clusters > 1:
+                            if n_clusters >= min_cluster_pred:
                                 for normalize in ['total', 'niche', 'obs', 'clr', 'niche&obs']:
                                     str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
                                     str_params = str_params + f'_normalize-{normalize}'
