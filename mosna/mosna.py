@@ -21,16 +21,21 @@ from scipy.stats import mannwhitneyu # Mann-Whitney rank test
 from scipy.stats import ks_2samp     # Kolmogorov-Smirnov statistic
 from statsmodels.stats.multitest import fdrcorrection
 import statsmodels.api as sm
-from lifelines import KaplanMeierFitter
+from lifelines import KaplanMeierFitter, CoxPHFitter
 from lifelines.statistics import logrank_test
 from lifelines.utils import inv_normal_cdf
 import warnings
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn import linear_model
-import xgboost
+from sklearn.model_selection import GridSearchCV, KFold
+from sklearn.pipeline import make_pipeline
+from sklearn.exceptions import FitFailedWarning
 from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
+from sksurv.linear_model import CoxnetSurvivalAnalysis
+from sksurv.preprocessing import OneHotEncoder
+import xgboost
 import composition_stats as cs
 import igraph as ig
 import scanorama
@@ -2170,233 +2175,428 @@ def make_niches_HMRF(
         betas = 'NULL'
 
 
+def surv_col_to_numpy(df_surv, event_col, duration_col):
+    y_df = df_surv[[event_col, duration_col]].copy()
+    y_df.loc[:, event_col] = y_df.loc[:, event_col].astype(bool)
+    records = y_df.to_records(index=False)
+    y = np.array(records, dtype = records.dtype.descr)
+    return y
 
-def screen_nas_parameters(X, pairs, markers, orders, dim_clusts, min_cluster_sizes, processed_dir, soft_clustering=True, 
-                          var_type=None, downsample=False, aggreg_dir=None, save_dir=None, opt_str='', parallel_clustering=4,
-                          n_neighbors=70, opt_args_reduc={}, opt_args_clust={}):
+
+def screen_nas_parameters(
+    status_pred: pd.DataFrame,
+    var_aggreg: pd.DataFrame = None,
+    var_aggreg_samples_info: pd.DataFrame = None,
+    pred_type: str = 'binary',
+    predict_key: str = 'sample',
+    group_col: str = None,
+    var_label: str = None,
+    duration_col: str = None,
+    event_col: str = None,
+    covariates: Iterable = [],
+    strata: str = None,
+    drop_nan: bool = True,
+    split_train_test: bool = True,
+    cv_train: int = 5,
+    cv_adapt: bool = True, 
+    cv_max:int = 10, 
+    min_clust_pred: int = 2,
+    max_clust_pred: int = 200,
+    min_score_plot: float = 0.85,
+    sof_dir: Union[str, Path] = None,
+    dir_save_interm: Union[str, Path] = None,
+    iter_reducer_type: Iterable = None,
+    iter_dim_clust: Iterable = None,
+    iter_n_neighbors: Iterable = None,
+    iter_metric: Iterable = None,
+    iter_clusterer_type: Iterable = None,
+    iter_normalize: Iterable = None,
+    clust_size_params: dict = None,
+    plot_heatmap: bool = False,
+    plot_alphas: bool = False,
+    plot_best_model_coefs: bool = False,
+    train_model: bool = True,
+    recompute: bool = False,
+    show_progress: bool = False,
+    n_jobs_gridsearch: int = -1,
+    verbose: int = 1,
+    ):
     """
-    Try combinations of parameters for the Neighbors Aggregation Statistics method, 
-    including the neighbors order of aggregation, the dimensionnality in which the aggregation
-    is performed, and the minimum cluster size.
-    Results and logs are saved as soon as an intermediate result is produced.
+    Perform grid-search for hyperparameters of the NAS pipeline.
+
+    Parameters
+    ----------
+    status_pred : pd.DataFrame
+        Table containing clinical or biological data for samples or patients.
+    var_aggreg : pd.DataFrame = None
+        Aggregated statistics of omics data for each cell's neighborhood.
+    var_aggreg_samples_info : pd.DataFrame = None
+        Sample and patient data for each cell.
+    pred_type : str = 'binary'
+        Type of prediction task to perform.
+    predict_key : str = 'sample'
+        Whether predicitons are made per patient or per sample.
+    group_col : str = None
+        Column of binary value to predict (response, etc...)
+    var_label : str = None
+        Column of sample or patient IDs.
+    duration_col : str = None
+        Column of survival duration.
+    event_col : str = None
+        Column indicating event, like death.
+    split_train_test: bool = True
+        Set to False to model data, not to predict from it.
+    min_score_plot: float = 0.85
+        Minimum value of ROC AUC to plot heatmaps.
+    """
+
+    assert pred_type in ('binary', 'survival'), "`pred_type` must be 'binary' or 'survival'"
+    assert predict_key in ('sample', 'patient'), "`predict_key` must be 'sample' or 'patient'"
+
+    columns = ['dim_clust', 'n_neighbors', 'metric', 'clusterer_type', 
+                'k_cluster', 'clust_size_param', 'n_clusters', 'normalize', 
+                'l1_ratio', 'alpha']
+    col_types = {
+        'dim_clust': int,
+        'n_neighbors': int,
+        'metric': 'category',
+        'k_cluster': int,
+        'clusterer_type': 'category',
+        'clust_size_param': float,
+        'n_clusters': int,
+        'normalize': 'category',
+        'l1_ratio': float,
+        'alpha': float,
+        }
+    l1_ratios = [.1, .5, .7, .9, .95, .99, 1]
+    min_alpha = 0.001
+
+    if pred_type == 'binary':
+        columns.extend(['score_roc_auc', 'score_ap', 'score_mcc'])
+        col_types['score_roc_auc'] = float
+        col_types['score_ap'] = float
+        col_types['score_mcc'] = float
+        if dir_save_interm is None:
+            dir_save_interm = sof_dir / f'search_LogReg_on_{predict_key}'
+            dir_save_interm.mkdir(parents=True, exist_ok=True)
+    elif pred_type == 'survival':
+        columns.extend(['score'])
+        col_types['score'] = float
+        dir_save_interm = sof_dir / 'search_CoxPH'
+        dir_save_interm.mkdir(parents=True, exist_ok=True)
+        if dir_save_interm is None:
+            dir_save_interm = sof_dir / f'search_CoxPH_on_{predict_key}'
+            dir_save_interm.mkdir(parents=True, exist_ok=True)
+
+    aggregated_path = dir_save_interm / 'all_models.parquet'
+    if aggregated_path.exists() and not recompute:
+        if verbose > 0:
+            print('Load NAS hyperparameters search results')
+        all_models = pd.read_parquet()
+        return all_models
+    elif not aggregated_path.exists() and not recompute:
+        if verbose > 0:
+            print('Aggregate NAS hyperparameters search results')
+        all_models = [pd.read_parquet(file_path) for file_path in dir_save_interm.glob('*.parquet')]
+        if len(all_models) > 0:
+            all_models = pd.concat(all_models, axis=0).astype(col_types)
+            all_models.index = np.arange(len(all_models))
+            return all_models
     
-    Example
-    -------
-    processed_dir = Path('../data/processed/CODEX_CTCL')
-    opt_str = '_samples-all_stat-mean-std'
-    """
-
-
-    if var_type is None:
-        var_type = 'markers'
-    if aggreg_dir is None:
-        aggreg_dir = processed_dir / "nas"
-    else:
-        aggreg_dir = processed_dir / aggreg_dir
-    if save_dir is None:
-        save_dir = aggreg_dir / f"screening_dim_reduc_clustering_nas_on-{var_type}{opt_str}_n_neighbors-{n_neighbors}_downsample-{downsample}"
-    else:
-        save_dir = aggreg_dir / save_dir
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    default_args_reduc = {
-        # 'n_neighbors': 30,
-        'metric': 'euclidean',
-        'min_dist': 0.0,
-        'random_state': 0,
-    }
-    default_args_clust = {'metric': 'euclidean'}
-
-    args_reduc = opt_args_reduc
-    for key, val in default_args_reduc.items():
-        if key not in args_reduc.keys():
-            args_reduc[key] = default_args_reduc[key]
-    args_clust = opt_args_clust
-    for key, val in default_args_clust.items():
-        if key not in args_clust.keys():
-            args_clust[key] = default_args_clust[key]
-    if downsample is False:
-        downsample = 1
-
-    # check if other info as source and target are in pairs and clean array
-    if pairs.shape[1] > 2:
-        print("Trimmimg additonnal columns in `pairs`")
-        pairs = pairs[:, :2].astype(int)
-
-    for order in orders:
-        print("order: {}".format(order))
+    # if no intermediate file was found or if recompute:
+    if verbose > 0:
+        print('searching hyperparameters')
+    all_models = []
+    if var_aggreg is None:
+        print('To search for the best NAS models, please provide `var_aggreg`.')
+        return
+    if var_aggreg_samples_info is None:
+        print('To search for the best NAS models, please provide `var_aggreg_samples_info`.')
+        return
         
-        # compute statistics on aggregated data across neighbors
-        file_path = aggreg_dir / f'nas_on-{var_type}{opt_str}.csv'
-        if os.path.exists(file_path):
-            print("load var_aggreg")
-            var_aggreg = pd.read_csv(file_path)
-        else:
-            print("computing var_aggreg...", end=' ')
-            var_aggreg = make_features_NAS(X=X, pairs=pairs, order=order, var_names=markers)
-            if not os.path.exists(aggreg_dir):
-                os.makedirs(aggreg_dir)
-            var_aggreg.to_csv(file_path, index=False)
-            print("done")
-        if downsample:
-            var_aggreg = var_aggreg.loc[::downsample, :]
+    # screen NAS parameters
+    if iter_reducer_type is None:
+        iter_reducer_type = ['umap']
+    if iter_dim_clust is None:
+        iter_dim_clust = [2, 3, 4, 5]
+    if iter_n_neighbors is None:
+        iter_n_neighbors = [15, 45, 75, 100, 200]
+    if iter_metric is None:
+        iter_metric = ['manhattan', 'euclidean', 'cosine']
+    if iter_clusterer_type is None:
+        iter_clusterer_type = ['hdbscan', 'spectral', 'ecg', 'leiden', 'gmm']
+    if clust_size_params is None:
+        clust_size_params = {
+            'spectral': {
+                'clust_size_param_name': 'n_clusters',
+                'iter_clust_size_param': range(3, 20),
+            },
+            'leiden': {
+                'clust_size_param_name': 'min_cluster_size',
+                'iter_clust_size_param': [0.1, 0.03, 0.01, 0.003, 0.001],
+            },
+            'hdbscan': {
+                'clust_size_param_name': 'resolution',
+                'iter_clust_size_param': [0.1, 0.03, 0.01, 0.003, 0.001],
+            },
+            'ecg': {
+                'clust_size_param_name': 'ecg_ensemble_size',
+                'iter_clust_size_param': [5, 10, 15, 20],
+            },
+            'gmm': {
+                'clust_size_param_name': 'n_clusters',
+                'iter_clust_size_param': range(3, 20),
+            },
+        }
+    if iter_normalize is None:
+        iter_normalize = ['total', 'niche', 'obs', 'clr', 'niche&obs']
 
-        # Dimension reduction for visualization
-        title = f"umap_on-{var_type}{opt_str}_order-{order}_n_neighbors-{n_neighbors}_dim_clust-2"
-        file_path = str(save_dir / title) + '.csv'
-        if os.path.exists(file_path):
-            print("load embed_viz")
-            embed_viz = np.loadtxt(file_path, delimiter=',')
-        else:
-            print("computing embed_viz...", end=' ')
-            embed_viz = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=0).fit_transform(var_aggreg)
-            np.savetxt(file_path, embed_viz, fmt='%.18e', delimiter=',', newline='\n')
-            print("done")
-        
-        # Dimension reduction for clustering
-        for dim_clust in dim_clusts:
-            print("    dim_clust: {}".format(dim_clust))
-            
-            title = f"umap_on-{var_type}{opt_str}_order-{order}_n_neighbors-{n_neighbors}_dim_clust-{dim_clust}"
-            file_path = str(save_dir / title) + '.csv'
-            if os.path.exists(file_path):
-                print("    load embed_clust_orig...", end=' ')
-                embed_clust_orig = np.loadtxt(file_path, delimiter=',')
-            else:
-                print("    computing embed_clust_orig...", end=' ')
-                embed_clust_orig = UMAP(n_neighbors=n_neighbors, **args_reduc).fit_transform(var_aggreg)
-                np.savetxt(file_path, embed_clust_orig, fmt='%.18e', delimiter=',', newline='\n')
-                print("done")
+    if show_progress:
+        iter_reducer_type = tqdm(iter_reducer_type, leave=False)
+    for reducer_type in iter_reducer_type:
+        if show_progress:
+            iter_dim_clust = tqdm(iter_dim_clust, leave=False)
+        for dim_clust in iter_dim_clust:
+            if show_progress:
+                iter_n_neighbors = tqdm(iter_n_neighbors, leave=False)
+            for n_neighbors in iter_n_neighbors:
+                if show_progress:
+                    iter_metric = tqdm(iter_metric, leave=False)
+                for metric in iter_metric:
+                    iter_k_cluster = [x for x in iter_n_neighbors if x <= n_neighbors]
+                    if show_progress:
+                        iter_k_cluster = tqdm(iter_k_cluster, leave=False)
+                    for k_cluster in iter_k_cluster:
+                        if show_progress:
+                            iter_clusterer_type = tqdm(iter_clusterer_type, leave=False)
+                        for clusterer_type in iter_clusterer_type:
+                            clust_size_param_name = clust_size_params[clusterer_type]['clust_size_param_name']
+                            iter_clust_size_param = clust_size_params[clusterer_type]['iter_clust_size_param']
 
-            for min_cluster_size in min_cluster_sizes:
-                print(f"        min_cluster_size: {min_cluster_size}")
+                            if show_progress:
+                                iter_clust_size_param = tqdm(iter_clust_size_param, leave=False)
+                            for clust_size_param in iter_clust_size_param:
+                                cluster_params = {
+                                    'reducer_type': reducer_type,
+                                    'n_neighbors': n_neighbors, 
+                                    'metric': metric,
+                                    'min_dist': 0.0,
+                                    'clusterer_type': clusterer_type, 
+                                    'dim_clust': dim_clust, 
+                                    'k_cluster': k_cluster, 
+                                    # 'flavor': 'CellCharter',
+                                    clust_size_param_name: clust_size_param,
+                                }
+                                str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
+                                if verbose > 1:
+                                    print(str_params)
 
-                for sampling in [1]:
-                    print(f"            sampling: {sampling}", end=', ')
-                    # title = f"hdbscan_on-{var_type}_reducer-umap_nas{opt_str}_order-{order}_n_neighbors-{n_neighbors}_dim_clust-{dim_clust}_min_cluster_size-{min_cluster_size}_sampling-{sampling}"
-                    title = f"hdbscan_reducer-umap_nas_on-{var_type}{opt_str}_order-{order}_n_neighbors-{n_neighbors}_dim_clust-{dim_clust}_min_cluster_size-{min_cluster_size}_sampling-{sampling}"
-                    if not os.path.exists(str(save_dir / title) + '.csv'):
-                        # downsample embedding
-                        select = np.full(embed_clust_orig.shape[0], False)
-                        select[::sampling] = True
-                        embed_clust = embed_clust_orig[select, :]
-                        
-                        start = time()
-                        # Clustering
-                        if soft_clustering:
-                            clusterer = HDBSCAN(
-                                min_cluster_size=min_cluster_size, 
-                                min_samples=None, 
-                                prediction_data=True, 
-                                core_dist_n_jobs=parallel_clustering,
-                                **args_clust,
-                            )
-                            clusterer.fit(embed_clust)
-                            soft_clusters = all_points_membership_vectors(clusterer)
-                            if len(soft_clusters.shape) > 1:
-                                labels_hdbs = soft_clusters.argmax(axis=1)
-                            else:
-                                labels_hdbs = soft_clusters
-                        else:
-                            clusterer = HDBSCAN( 
-                                min_cluster_size=min_cluster_size, 
-                                min_samples=1,
-                                core_dist_n_jobs=parallel_clustering,
-                                **args_clust,
-                            )
-                            clusterer.fit(embed_clust)
-                            labels_hdbs = clusterer.labels_
-                        nb_clust_hdbs = labels_hdbs.max() # + 1
-                        end = time()
-                        duration = end-start
-                        print("HDBSCAN has detected {} clusters in {:.2f}s".format(nb_clust_hdbs, duration))
-                        
-                        np.savetxt(str(save_dir / title) + '.csv',
-                                    labels_hdbs, 
-                                    fmt='%.18e', delimiter=',', newline='\n')
-                        title = "clusterer-" + title
-                        joblib.dump(clusterer, str(save_dir / title) + '.pkl')
+                                cluster_labels, cluster_dir, nb_clust, _ = get_clusterer(var_aggreg, sof_dir, verbose=verbose, **cluster_params)
+                                n_clusters = len(np.unique(cluster_labels))
+                                
+                                # Survival analysis (just heatmap for now)
+                                niches = cluster_labels
+                                if n_clusters >= min_clust_pred:
+                                    for normalize in iter_normalize:
+                                        str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
+                                        str_params = str_params + f'_normalize-{normalize}'
 
-    print("\n\nFinished!\n\n")
-    return
+                                        results_path = dir_save_interm / f'{str_params}.parquet'
+                                        new_model = None
+                                        l1_ratio = np.nan
+                                        alpha = np.nan
+                                        score_roc_auc = np.nan
+                                        score_ap = np.nan
+                                        score_mcc = np.nan
+                                        score_cic = np.nan
 
+                                        if results_path.exists() and not recompute:
+                                            if verbose > 2:
+                                                print(f'load {results_path.stem}')
+                                            new_model = pd.read_parquet(results_path)
+                                        else:
+                                            if train_model and n_clusters < max_clust_pred:
+                                                if verbose > 2:
+                                                    print(f'compute {results_path.stem}')
+                                        
+                                                var_aggreg_niches = var_aggreg_samples_info.copy()
+                                                var_aggreg_niches['niche'] = np.array(niches)
 
-def screen_nas_parameters_parallel(
-    X, pairs, markers, orders, dim_clusts, min_cluster_sizes, processed_dir, soft_clustering=True, 
-    var_type=None, downsample=False, aggreg_dir=None, save_dir=None, opt_str='', 
-    parallel_dim='max', parallel_clust_size=False, parallel_clustering=8, memory_limit='50GB',
-    opt_args_reduc={}, opt_args_clust={}):
-    """
-    Try combinations of parameters for the Neighbors Aggregation Statistics method, 
-    including the neighbors order of aggregation, the dimensionnality in which the aggregation
-    is performed, and the minimum cluster size.
-    Results and logs are saved as soon as an intermediate result is produced.
-    
-    Example
-    -------
-    processed_dir = Path('../data/processed/CODEX_CTCL')
-    opt_str = '_samples-all_stat-mean-std'
-    """
+                                                counts = make_niches_composition(var_aggreg_niches[predict_key], niches, var_label=var_label, normalize=normalize)
+                                                counts.index = counts.index.astype(status_pred.index.dtype)
+                                                exo_vars = counts.columns.astype(str).tolist()
 
-    for order in orders:
-        print("order: {}".format(order))
-        
-        # compute statistics on aggregated data across neighbors
-        file_path = aggreg_dir / 'nas_on-{var_type}{opt_str}.csv'
-        if os.path.exists(file_path):
-            var_aggreg = pd.read_csv(file_path)
-        else:
-            var_aggreg = make_features_NAS(X=X, pairs=pairs, order=order, var_names=markers)
-            var_aggreg.to_csv(file_path, index=False)
-        if downsample:
-            var_aggreg = var_aggreg.loc[::downsample, :]
+                                                df_surv = pd.concat([status_pred, counts], axis=1, join='inner').fillna(0)
+                                                df_surv.columns = df_surv.columns.astype(str)
+                                                df_surv.index.name = var_label
+                                                if drop_nan:
+                                                    n_obs_orig = len(df_surv)
+                                                    df_surv.dropna(axis=0, inplace=True)
+                                                    n_obs = len(df_surv)
 
-        # Dimension reduction for visualization
-        title = f"umap_on-{var_type}{opt_str}_order-{order}_dim_clust-2"
-        file_path = str(save_dir / title) + '.csv'
-        if os.path.exists(file_path):
-            embed_viz = np.loadtxt(file_path, delimiter=',')
-        else:
-            embed_viz = UMAP(n_components=2, random_state=0).fit_transform(var_aggreg)
-            np.savetxt(file_path, embed_viz, fmt='%.18e', delimiter=',', newline='\n')
-        
-        # Dimension reduction for clustering
-        # select the right number of cores
-        nb_cores = cpu_count()
-        if isinstance(parallel_dim, int):
-            use_cores = min(parallel_dim, nb_cores)
-        elif parallel_dim == 'max-1':
-            use_cores = nb_cores - 1
-        elif parallel_dim == 'max':
-            use_cores = nb_cores
-        print(f"using {use_cores} cores")
-        # # set up cluster and workers
-        cluster = LocalCluster(n_workers=use_cores, 
-                                threads_per_worker=1,
-                                memory_limit=memory_limit)
-        client = Client(cluster)
-        # client = Client(threads_per_worker=2, n_workers=nb_cores)
+                                                if pred_type == 'binary':
+                                                    models = logistic_regression(
+                                                        df_surv[exo_vars + [group_col]],
+                                                        y_name=group_col,
+                                                        col_drop=[var_label],
+                                                        cv_train=cv_train, 
+                                                        cv_adapt=cv_adapt, 
+                                                        cv_max=cv_max,
+                                                        plot_coefs=False,
+                                                        split_train_test=split_train_test,
+                                                        )
+                                                    
+                                                    score_roc_auc = np.nanmax([models[model_type]['score']['ROC AUC'] for model_type in models.keys()])
+                                                    score_ap = np.nanmax([models[model_type]['score']['AP'] for model_type in models.keys()])
+                                                    score_mcc = np.nanmax([models[model_type]['score']['MCC'] for model_type in models.keys()])
+                                                    if verbose > 2:
+                                                        print(f'score ROC AUCc: {score_roc_auc:.3f}')
+                                                        print(f'score AP: {score_ap:.3f}')
+                                                        print(f'score MCC: {score_mcc:.3f}')
+                                                    
+                                                    best_id = np.argmax([models[model_type]['score']['ROC AUC'] for model_type in models.keys()])
+                                                    l1_ratio = [models[model_type]['model'].l1_ratio_[0] for model_type in models.keys()][best_id]
+                                                    alpha = [models[model_type]['model'].C_[0] for model_type in models.keys()][best_id]
+                                                    
+                                                    if score_roc_auc >= min_score_plot:
+                                                        if plot_heatmap:
+                                                            # make folder to save figures
+                                                            path_parts = cluster_dir.parts[-2:]
+                                                            dir_save_figures = dir_save_interm
+                                                            for part in path_parts:
+                                                                dir_save_figures = dir_save_figures / part
+                                                            dir_save_figures.mkdir(parents=True, exist_ok=True)
 
-        # dummy output for Dask
-        lazy_output = []
-        for dim_clust in dim_clusts:
-            mini_out = delayed(screen_nas_parameters)(
-                X, pairs, markers, orders=[order], dim_clusts=[dim_clust], min_cluster_sizes=min_cluster_sizes, 
-                processed_dir=processed_dir, soft_clustering=soft_clustering, var_type=var_type, downsample=downsample, 
-                aggreg_dir=aggreg_dir, save_dir=save_dir, opt_str=opt_str,parallel_clustering=parallel_clustering) 
-                # f'Screening finished for dim_clust {dim_clust}.'
-            lazy_output.append(mini_out)
-        # evaluate the parallel computation
-        # log_final = delayed(np.unique)(lazy_output).compute()
-        dask.compute(*lazy_output)
-        # lazy_output.compute()
-        # close workers and cluster
-        client.close()
-        cluster.close()
+                                                            try:
+                                                                g, d = plot_heatmap(
+                                                                    df_surv[exo_vars + [group_col]].reset_index(), 
+                                                                    obs_labels=var_label, 
+                                                                    group_var=group_col, 
+                                                                    groups=[0, 1],
+                                                                    group_names=group_cat_mapper,
+                                                                    figsize=(10, 10),
+                                                                    z_score=False,
+                                                                    cmap=sns.color_palette("Reds", as_cmap=True),
+                                                                    return_data=True,
+                                                                    )
+                                                                figname = f"biclustering_{str_params}_roc_auc-{score_roc_auc:.3f}.jpg"
+                                                                plt.savefig(dir_save_figures / figname, dpi=150)
+                                                                plt.show()
 
-    print("\n\nFinished!\n\n")
-    return
+                                                                g, d = plot_heatmap(
+                                                                    df_surv[exo_vars + [group_col]].reset_index(), 
+                                                                    obs_labels=var_label, 
+                                                                    group_var=group_col, 
+                                                                    groups=[0, 1],
+                                                                    group_names=group_cat_mapper,
+                                                                    figsize=(10, 10),
+                                                                    z_score=1,
+                                                                    cmap=sns.color_palette("Reds", as_cmap=True),
+                                                                    return_data=True,
+                                                                    )
+                                                                figname = f"biclustering_{str_params}_roc_auc-{score_roc_auc:.3f}_col_zscored.jpg"
+                                                                plt.savefig(dir_save_figures / figname, dpi=150)
+                                                                plt.show()
+                                                            except:
+                                                                pass
+
+                                                elif pred_type == 'survival':
+                                                    # non_pred_cols = [patient_col, sample_col, event_col, duration_col]
+                                                    # pred_cols = [x for x in df_surv if x not in non_pred_cols]
+
+                                                    # Xt = OneHotEncoder().fit_transform(X)
+                                                    Xt = df_surv[exo_vars]
+                                                    Xt.columns = Xt.columns.astype(str)
+                                                    y = surv_col_to_numpy(df_surv, event_col, duration_col)
+
+                                                    # Search best CoxPH model
+                                                    models = []
+                                                    scores = []
+                                                    all_cv_results = []
+                                                    for l1_ratio in l1_ratios:
+                                                        if verbose > 1:
+                                                            print(f'l1_ratio: {l1_ratio}', end='; ')
+                                                        
+                                                        try:
+                                                            coxnet_pipe = make_pipeline(StandardScaler(), CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=min_alpha, max_iter=100))
+                                                            coxnet_pipe.fit(Xt, y)
+
+                                                            # retrieve best alpha
+                                                            estimated_alphas = coxnet_pipe.named_steps["coxnetsurvivalanalysis"].alphas_
+                                                            # estimated_alphas = [0.1, 0.01]
+
+                                                            cv = KFold(n_splits=5, shuffle=True, random_state=0)
+                                                            gcv = GridSearchCV(
+                                                                make_pipeline(StandardScaler(), CoxnetSurvivalAnalysis(l1_ratio=l1_ratio)),
+                                                                param_grid={"coxnetsurvivalanalysis__alphas": [[v] for v in estimated_alphas]},
+                                                                cv=cv,
+                                                                error_score=0.5,
+                                                                n_jobs=n_jobs_gridsearch,
+                                                            ).fit(Xt, y)
+
+                                                            cv_results = pd.DataFrame(gcv.cv_results_)
+
+                                                            # retrieve best model
+                                                            best_model = gcv.best_estimator_.named_steps["coxnetsurvivalanalysis"]
+
+                                                            models.append(best_model)
+                                                            scores.append(best_model.score(Xt, y))
+                                                            all_cv_results.append(cv_results)
+                                                        except Exception as e:
+                                                            print(e)
+                                                    
+                                                    if len(scores) > 0:
+                                                        best_score_id = np.argmax(scores)
+                                                        best_model = models[best_score_id]
+                                                        best_cv = all_cv_results[best_score_id]
+                                                        score_cic = scores[best_score_id] # concordance index right-censored
+                                                        l1_ratio = best_model.l1_ratio
+                                                        alpha = best_model.alphas[0]
+                                                        best_coefs = pd.DataFrame(best_model.coef_, index=Xt.columns, columns=["coefficient"])
+                                                        non_zero = np.sum(best_coefs.iloc[:, 0] != 0)
+                                                        # print(f"Number of non-zero coefficients: {non_zero}")
+                                                        non_zero_coefs = best_coefs.query("coefficient != 0")
+                                                        coef_order = non_zero_coefs.abs().sort_values("coefficient").index
+                                                        n_coefs = len(non_zero_coefs)
+
+                                                        if plot_alphas:
+                                                            alphas = cv_results.param_coxnetsurvivalanalysis__alphas.map(lambda x: x[0])
+                                                            mean = cv_results.mean_test_score
+                                                            std = cv_results.std_test_score
+
+                                                            fig, ax = plt.subplots(figsize=(9, 6))
+                                                            ax.plot(alphas, mean)
+                                                            ax.fill_between(alphas, mean - std, mean + std, alpha=0.15)
+                                                            ax.set_xscale("log")
+                                                            ax.set_ylabel("concordance index")
+                                                            ax.set_xlabel("alpha")
+                                                            ax.axvline(gcv.best_params_["coxnetsurvivalanalysis__alphas"][0], c="C1")
+                                                            ax.axhline(0.5, color="grey", linestyle="--")
+                                                            ax.grid(True)
+
+                                                        if plot_best_model_coefs:
+                                                            _, ax = plt.subplots(figsize=(6, 8))
+                                                            non_zero_coefs.loc[coef_order].plot.barh(ax=ax, legend=False)
+                                                            ax.set_xlabel("coefficient")
+                                                            ax.set_title(f'l1_ratio: {l1_ratio}  alpha: {alpha:.3g}  score: {score_cic:.3g}')
+                                                            ax.grid(True)
+                                            
+                                            new_model = [dim_clust, n_neighbors, metric, clusterer_type, k_cluster, 
+                                                         clust_size_param, n_clusters, normalize, l1_ratio, alpha]
+                                            if pred_type == 'binary':
+                                                new_model.extend([score_roc_auc, score_ap, score_mcc])
+                                            elif pred_type == 'survival':
+                                                new_model.extend([score_cic])
+                                            new_model = pd.DataFrame(data=np.array(new_model).reshape((1, -1)), columns=columns)
+                                            new_model = new_model.astype(col_types)
+                                            new_model.to_parquet(results_path)
+                                        
+                                        all_models.append(new_model.values)
+
+    all_models = pd.DataFrame(all_models, columns=columns)
+    all_models = all_models.astype(col_types)
+    all_models.to_parquet(aggregated_path)
+    return all_models
 
 
 def plot_screened_parameters(obj, cell_pos_cols, cell_type_col, orders, dim_clusts, processed_dir,
