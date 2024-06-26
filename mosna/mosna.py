@@ -2213,6 +2213,7 @@ def screen_nas_parameters(
     iter_clusterer_type: Iterable = None,
     iter_normalize: Iterable = None,
     clust_size_params: dict = None,
+    iter_k_cluster: Iterable = None,
     plot_heatmap: bool = False,
     plot_alphas: bool = False,
     plot_best_model_coefs: bool = False,
@@ -2364,10 +2365,14 @@ def screen_nas_parameters(
                 if show_progress:
                     iter_metric = tqdm(iter_metric, leave=False)
                 for metric in iter_metric:
-                    iter_k_cluster = [x for x in iter_n_neighbors if x <= n_neighbors]
+                    if iter_k_cluster is None:
+                        iter_k_cluster_used = [n_neighbors]
+                    else:
+                        # avoid clustering given more neighbors than what was used for dim reduction
+                        iter_k_cluster_used = [x for x in iter_k_cluster if x <= n_neighbors]
                     if show_progress:
-                        iter_k_cluster = tqdm(iter_k_cluster, leave=False)
-                    for k_cluster in iter_k_cluster:
+                        iter_k_cluster_used = tqdm(iter_k_cluster_used, leave=False)
+                    for k_cluster in iter_k_cluster_used:
                         if show_progress:
                             iter_clusterer_type = tqdm(iter_clusterer_type, leave=False)
                         for clusterer_type in iter_clusterer_type:
@@ -3789,7 +3794,8 @@ def get_reducer(
     data_dir = Path(data_dir) / reducer_name
     file_path = data_dir / "embedding"
     if os.path.exists(str(file_path) + '.npy') and not force_recompute:
-        if verbose > 0: print("Loading reducer object and reduced coordinates")
+        if verbose > 0: 
+            print("Loading reducer object and reduced coordinates")
         embedding = np.load(str(file_path) + '.npy')
         if os.path.exists(str(data_dir / "reducer") + '.pkl'):
             reducer = joblib.load(str(data_dir / "reducer") + '.pkl')
@@ -3808,7 +3814,6 @@ def get_reducer(
                 min_dist=min_dist,
                 )
             if isinstance(data, pd.DataFrame):
-
                 embedding = reducer.fit_transform(data.values)
             else:
                 embedding = reducer.fit_transform(data)
@@ -4639,9 +4644,6 @@ def logistic_regression(
         if col in X.columns:
             X.drop(columns=col, inplace=True)
     # # select groups
-    # X = X.loc[(X.loc[:, y_name] == 1) | (X.loc[:, y_name] == 2), :]
-    # y = X[y_name].values - 1  # to have resp=0, non-resp=1
-    # handled differently now: 1=resp, 0=non-resp
     y = X[y_name].values
     X = X.drop(columns=[y_name])
     var_idx = X.columns
