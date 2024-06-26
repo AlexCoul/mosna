@@ -49,20 +49,21 @@ from dask import delayed
 import dask
 
 from tysserand import tysserand as ty
-# try:
-#     import cupy as cp
-#     import cugraph
-#     import cudf
-#     from cuml import UMAP
-#     from cuml import HDBSCAN
-#     from cuml.cluster.hdbscan import all_points_membership_vectors
-#     gpu_clustering = True
-# except:
+try:
+    import cupy as cp
+    import cugraph
+    import cudf
+    # from cuml import UMAP
+    from cuml import HDBSCAN
+    from cuml.cluster.hdbscan import all_points_membership_vectors
+    gpu_clustering = True
+except:
+    from umap import UMAP
+    from hdbscan import HDBSCAN
+    from hdbscan import all_points_membership_vectors
+    import leidenalg as la
+    gpu_clustering = False
 from umap import UMAP
-from hdbscan import HDBSCAN
-from hdbscan import all_points_membership_vectors
-import leidenalg as la
-gpu_clustering = False
 # from pycave.bayes import GaussianMixture
 
 
@@ -2200,8 +2201,8 @@ def screen_nas_parameters(
     cv_train: int = 5,
     cv_adapt: bool = True, 
     cv_max:int = 10, 
-    min_clust_pred: int = 2,
-    max_clust_pred: int = 200,
+    min_cluster_pred: int = 2,
+    max_cluster_pred: int = 200,
     min_score_plot: float = 0.85,
     sof_dir: Union[str, Path] = None,
     dir_save_interm: Union[str, Path] = None,
@@ -2292,7 +2293,7 @@ def screen_nas_parameters(
     if aggregated_path.exists() and not recompute:
         if verbose > 0:
             print('Load NAS hyperparameters search results')
-        all_models = pd.read_parquet()
+        all_models = pd.read_parquet(aggregated_path)
         return all_models
     elif not aggregated_path.exists() and not recompute:
         if verbose > 0:
@@ -2396,7 +2397,7 @@ def screen_nas_parameters(
                                 
                                 # Survival analysis (just heatmap for now)
                                 niches = cluster_labels
-                                if n_clusters >= min_clust_pred:
+                                if n_clusters >= min_cluster_pred:
                                     for normalize in iter_normalize:
                                         str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
                                         str_params = str_params + f'_normalize-{normalize}'
@@ -2415,7 +2416,7 @@ def screen_nas_parameters(
                                                 print(f'load {results_path.stem}')
                                             new_model = pd.read_parquet(results_path)
                                         else:
-                                            if train_model and n_clusters < max_clust_pred:
+                                            if train_model and n_clusters < max_cluster_pred:
                                                 if verbose > 2:
                                                     print(f'compute {results_path.stem}')
                                         
@@ -3277,7 +3278,10 @@ def plot_distrib_groups(
             # convert key types
             group_names = {to_type(key): val for key, val in group_names.items()}
             new_labels = [group_names[x] for x in previous_labels]
-        ax.legend(handles=handles, labels=new_labels)
+        if legend_opt is None:
+            ax.legend(handles=handles, labels=new_labels)
+        else:
+            ax.legend(handles=handles, labels=new_labels, **legend_opt)
     if ax_none:
         return fig, ax
 
@@ -3732,7 +3736,7 @@ def make_reducer_name(
 
 def get_reducer(
     data, 
-    save_dir, 
+    data_dir, 
     reducer_type='umap', 
     n_components=2, 
     n_neighbors=15, 
@@ -3751,7 +3755,7 @@ def get_reducer(
     ----------
     data : ndarray
         Dataset on which we want to apply the DR method.
-    save_dir : str or pathlib Path object
+    data_dir : str or pathlib Path object
         Directory where the DR model and transformed data are stored.
     reducer_type : str
         DR method, can be 'umap', for now, other ones coming soon.
@@ -3778,17 +3782,17 @@ def get_reducer(
     Example
     -------
     In the *mosna* pipeline, `var_aggreg` is the array of aggregated statistics:
-    >>> embedding, reducer = get_reducer(data=var_aggreg, save_dir=nas_dir)
+    >>> embedding, reducer = get_reducer(data=var_aggreg, data_dir=nas_dir)
     """
 
     reducer_name = make_reducer_name(reducer_type, n_components, n_neighbors, metric, min_dist)
-    save_dir = Path(save_dir) / reducer_name
-    file_path = save_dir / "embedding"
+    data_dir = Path(data_dir) / reducer_name
+    file_path = data_dir / "embedding"
     if os.path.exists(str(file_path) + '.npy') and not force_recompute:
         if verbose > 0: print("Loading reducer object and reduced coordinates")
         embedding = np.load(str(file_path) + '.npy')
-        if os.path.exists(str(save_dir / "reducer") + '.pkl'):
-            reducer = joblib.load(str(save_dir / "reducer") + '.pkl')
+        if os.path.exists(str(data_dir / "reducer") + '.pkl'):
+            reducer = joblib.load(str(data_dir / "reducer") + '.pkl')
         else:
             reducer = None
     else:
@@ -3817,18 +3821,18 @@ def get_reducer(
 
         if save_reduced_coords:
             # save reduced coordinates
-            save_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
             np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
         if save_reducer:
             # save the reducer object
-            joblib.dump(reducer, str(save_dir / "reducer") + '.pkl')
+            joblib.dump(reducer, str(data_dir / "reducer") + '.pkl')
     
     return embedding, reducer
 
 
 def get_clusterer(
         data,
-        save_dir,
+        data_dir,
         reducer_type='umap', 
         n_neighbors=15, 
         metric='manhattan', 
@@ -3858,7 +3862,7 @@ def get_clusterer(
     ----------
     data : ndarray
         Dataset on which we want to apply the DR method.
-    save_dir : str or pathlib Path object
+    data_dir : str or pathlib Path object
         Directory where the DR model and transformed data are stored.
     reducer_type : str
         DR method, can be 'umap', for now, other ones coming soon.
@@ -3894,7 +3898,7 @@ def get_clusterer(
         Whether the number of neighbors for clustering is limited by the number of
         neighbors for dimensionality reduction.
     force_recompute : bool
-        Whether computation occurs even if results already exist in `save_dir`.
+        Whether computation occurs even if results already exist in `data_dir`.
     use_gpu : boo
         If True, GMM clustering leverages GPU.
     
@@ -3929,7 +3933,7 @@ def get_clusterer(
             if n_clusters is None:
                 n_clusters = 10
     reducer_name = make_reducer_name(reducer_type, dim_clust, n_neighbors, metric, min_dist)
-    reducer_dir = Path(save_dir) / reducer_name
+    reducer_dir = Path(data_dir) / reducer_name
     k_cluster = int(k_cluster)
     if avoid_neigh_overflow and k_cluster > n_neighbors:
         if verbose > 0:
@@ -3992,7 +3996,7 @@ def get_clusterer(
     else:
         # get the embedding of data
         embedding, _ = get_reducer(
-            data, save_dir, reducer_type, dim_clust, n_neighbors, 
+            data, data_dir, reducer_type, dim_clust, n_neighbors, 
             metric, min_dist, random_state=random_state, verbose=verbose)
         if verbose > 0: 
             print("Performing clustering")

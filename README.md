@@ -16,7 +16,7 @@ conda activate mosna-gpu
 
 without GPU you can do:
 ```bash
-conda create --solver=libmamba -n mosna-c conda-forge python=3.10 scanpy
+conda create --solver=libmamba -n mosna -c conda-forge python=3.10 scanpy
 conda activate mosna
 ```
 
@@ -26,4 +26,5 @@ pip install ipykernel ipywidgets
 pip install tysserand
 cd /path/to/mosna_benchmark/
 pip install -e .
+pip install scipy==1.13
 ```
