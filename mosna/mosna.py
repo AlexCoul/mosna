@@ -2333,12 +2333,12 @@ def screen_nas_parameters(
                 'iter_clust_size_param': range(3, 20),
             },
             'leiden': {
-                'clust_size_param_name': 'min_cluster_size',
+                'clust_size_param_name': 'resolution',
                 'iter_clust_size_param': [0.1, 0.03, 0.01, 0.003, 0.001],
             },
             'hdbscan': {
-                'clust_size_param_name': 'resolution',
-                'iter_clust_size_param': [0.1, 0.03, 0.01, 0.003, 0.001],
+                'clust_size_param_name': 'min_cluster_size',
+                'iter_clust_size_param': [50, 200],
             },
             'ecg': {
                 'clust_size_param_name': 'ecg_ensemble_size',
