@@ -2323,6 +2323,8 @@ def screen_nas_parameters(
         iter_dim_clust = [2, 3, 4, 5]
     if iter_n_neighbors is None:
         iter_n_neighbors = [15, 45, 75, 100, 200]
+    if iter_k_cluster is None:
+        iter_k_cluster = iter_n_neighbors
     if iter_metric is None:
         iter_metric = ['manhattan', 'euclidean', 'cosine']
     if iter_clusterer_type is None:
@@ -2353,6 +2355,9 @@ def screen_nas_parameters(
     if iter_normalize is None:
         iter_normalize = ['total', 'niche', 'obs', 'clr', 'niche&obs']
 
+    print('iter_n_neighbors:', iter_n_neighbors)
+    print('iter_k_cluster:', iter_k_cluster)
+
     if show_progress:
         iter_reducer_type = tqdm(iter_reducer_type, leave=False)
     for reducer_type in iter_reducer_type:
@@ -2365,11 +2370,8 @@ def screen_nas_parameters(
                 if show_progress:
                     iter_metric = tqdm(iter_metric, leave=False)
                 for metric in iter_metric:
-                    if iter_k_cluster is None:
-                        iter_k_cluster_used = [n_neighbors]
-                    else:
-                        # avoid clustering given more neighbors than what was used for dim reduction
-                        iter_k_cluster_used = [x for x in iter_k_cluster if x <= n_neighbors]
+                    # avoid clustering given more neighbors than what was used for dim reduction
+                    iter_k_cluster_used = [x for x in iter_k_cluster if x <= n_neighbors]
                     if show_progress:
                         iter_k_cluster_used = tqdm(iter_k_cluster_used, leave=False)
                     for k_cluster in iter_k_cluster_used:
