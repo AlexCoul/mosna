@@ -33,6 +33,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.exceptions import FitFailedWarning
 from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
+from sklearn.decomposition._pca import PCA as PCA_type
+from sklearn.decomposition import PCA
 from sksurv.linear_model import CoxnetSurvivalAnalysis
 from sksurv.preprocessing import OneHotEncoder
 import xgboost
@@ -2833,7 +2835,123 @@ def plot_niches_histogram(niches, ax=None):
     ax.bar(niche_id, niche_count, width=0.8)
     ax.set_xticks(niche_id)
     return ax
-    
+
+def plot_pca(
+    data: pd.DataFrame,
+    pca: PCA_type = None,
+    x_reduced: np.ndarray = None,
+    n_components: int = 2,
+    use_cols: Iterable = None,
+    figsize: Tuple = (7, 7),
+    scale_coords: int = True,
+    labels: Iterable = None,
+    label_colors: Union[str, Iterable] = None,
+    labels_color_mapper: dict = None,
+    legend: bool = True,
+    legend_opt: dict = None,
+    show_grid: bool = True,
+    ):
+    """
+    Perform Principal Components Analysis and plot observations in
+    reduced dimensions and variables' contributions.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Data holding original variables.
+    pca : PCA_type = None
+        Pre-computed PCA model
+    x_reduced : np.ndarray = None
+        Pre-computed reduced coordinates.
+    n_components : int = 2
+        Number of PCA's components.
+    use_cols : Iterable = None
+        Variables to use for PCA.
+    figsize : Tuple = (7, 7)
+        Figure size.
+    scale_coords : int = True
+        If True, coordinates are scaled with respect to the plot.
+    labels : Iterable = None
+        Observations' classes.
+    label_colors : str = None
+        If no label is provided, a single color or an array of 
+        colors, one for each observation.
+    labels_color_mapper : dict = None
+        Dictionnary mapping each class to a color.
+    legend : bool = True
+        If True, display a legend.
+    legend_opt : dict = None
+        Position of the legend.
+    show_grid : bool = True
+        If True, display a grid.
+    """
+
+    if use_cols is None:
+        use_cols = data.columns
+    if pca is None:
+        sc = StandardScaler()
+        X = data[use_cols]
+        X = sc.fit_transform(X)
+        pca = PCA(n_components=n_components)
+    if x_reduced is None:
+        x_reduced = pca.fit_transform(X)
+
+    score = x_reduced[:, 0:2]
+    coeff = np.transpose(pca.components_[0:2, :])
+
+    xs = score[:, 0]
+    ys = score[:, 1]
+    n_var = coeff.shape[0]
+    if scale_coords:
+        scalex = 1.0/(xs.max() - xs.min())
+        scaley = 1.0/(ys.max() - ys.min())
+    else:
+        scalex = 1.0
+        scaley = 1.0
+
+    if labels is not None:
+        uniq_labels = np.unique(labels)
+        nb_clust = len(uniq_labels)
+
+        if labels_color_mapper is None:
+            # choose colormap
+            labels_cmap = mosna.make_cluster_cmap(uniq_labels)
+            # make color mapper
+            # series to sort by decreasing order
+            n_colors = len(labels_cmap)
+            labels_color_mapper = {x: labels_cmap[i % n_colors] for i, x in enumerate(uniq_labels)}
+    else:
+        if label_colors is None:
+            label_colors = 'royalblue'
+            
+    fig, ax = plt.subplots(figsize=figsize)
+    if labels is not None:
+        for label_id in np.unique(labels):
+            select = labels == label_id
+            plt.scatter(score[select, 0]*scalex, score[select, 1]*scaley, 
+                        c=labels_color_mapper[label_id], marker='.',
+                        label=label_id);
+        if legend:
+            if legend_opt is None:
+                plt.legend()
+            else:
+                plt.legend(**legend_opt)
+    else:
+        plt.scatter(score[:, 0]*scalex, embed_scoreviz[:, 1]*scaley, c=label_colors, marker='.');
+
+    for i in range(n_var):
+        plt.arrow(0, 0, coeff[i,0], coeff[i,1], color='r', alpha=0.5)
+        if use_cols is None:
+            plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, "Var"+str(i+1), color = 'g', ha = 'center', va = 'center')
+        else:
+                plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, use_cols[i], color = 'g', ha = 'center', va = 'center')
+    plt.xlim(-1,1)
+    plt.ylim(-1,1)
+    plt.xlabel("PC{}".format(1))
+    plt.ylabel("PC{}".format(2))
+    if show_grid:
+        plt.grid()
+    return fig, ax, pca, x_reduced
 
 ###### Survival and response statistics ######
 
