@@ -2599,7 +2599,7 @@ def screen_nas_parameters(
                                             new_model = new_model.astype(col_types)
                                             new_model.to_parquet(results_path)
                                         
-                                        all_models.append(new_model.values)
+                                        all_models.append(new_model.values.ravel())
 
     all_models = pd.DataFrame(all_models, columns=columns)
     all_models = all_models.astype(col_types)
