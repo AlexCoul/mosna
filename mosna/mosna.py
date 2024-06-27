@@ -2357,9 +2357,6 @@ def screen_nas_parameters(
     if iter_normalize is None:
         iter_normalize = ['total', 'niche', 'obs', 'clr', 'niche&obs']
 
-    print('iter_n_neighbors:', iter_n_neighbors)
-    print('iter_k_cluster:', iter_k_cluster)
-
     if show_progress:
         iter_reducer_type = tqdm(iter_reducer_type, leave=False)
     for reducer_type in iter_reducer_type:
