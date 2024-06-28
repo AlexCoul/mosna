@@ -33,6 +33,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.exceptions import FitFailedWarning
 from sklearn.model_selection import train_test_split
 import sklearn.metrics as metrics
+from sklearn.decomposition._pca import PCA as PCA_type
+from sklearn.decomposition import PCA
 from sksurv.linear_model import CoxnetSurvivalAnalysis
 from sksurv.preprocessing import OneHotEncoder
 import xgboost
@@ -49,20 +51,21 @@ from dask import delayed
 import dask
 
 from tysserand import tysserand as ty
-# try:
-#     import cupy as cp
-#     import cugraph
-#     import cudf
-#     from cuml import UMAP
-#     from cuml import HDBSCAN
-#     from cuml.cluster.hdbscan import all_points_membership_vectors
-#     gpu_clustering = True
-# except:
+try:
+    import cupy as cp
+    import cugraph
+    import cudf
+    # from cuml import UMAP
+    from cuml import HDBSCAN
+    from cuml.cluster.hdbscan import all_points_membership_vectors
+    gpu_clustering = True
+except:
+    from umap import UMAP
+    from hdbscan import HDBSCAN
+    from hdbscan import all_points_membership_vectors
+    import leidenalg as la
+    gpu_clustering = False
 from umap import UMAP
-from hdbscan import HDBSCAN
-from hdbscan import all_points_membership_vectors
-import leidenalg as la
-gpu_clustering = False
 # from pycave.bayes import GaussianMixture
 
 
@@ -2200,8 +2203,8 @@ def screen_nas_parameters(
     cv_train: int = 5,
     cv_adapt: bool = True, 
     cv_max:int = 10, 
-    min_clust_pred: int = 2,
-    max_clust_pred: int = 200,
+    min_cluster_pred: int = 2,
+    max_cluster_pred: int = 200,
     min_score_plot: float = 0.85,
     sof_dir: Union[str, Path] = None,
     dir_save_interm: Union[str, Path] = None,
@@ -2212,6 +2215,7 @@ def screen_nas_parameters(
     iter_clusterer_type: Iterable = None,
     iter_normalize: Iterable = None,
     clust_size_params: dict = None,
+    iter_k_cluster: Iterable = None,
     plot_heatmap: bool = False,
     plot_alphas: bool = False,
     plot_best_model_coefs: bool = False,
@@ -2280,10 +2284,9 @@ def screen_nas_parameters(
             dir_save_interm = sof_dir / f'search_LogReg_on_{predict_key}'
             dir_save_interm.mkdir(parents=True, exist_ok=True)
     elif pred_type == 'survival':
-        columns.extend(['score'])
+        columns.extend(['n_coeffs', 'score'])
+        col_types['n_coeffs'] = int
         col_types['score'] = float
-        dir_save_interm = sof_dir / 'search_CoxPH'
-        dir_save_interm.mkdir(parents=True, exist_ok=True)
         if dir_save_interm is None:
             dir_save_interm = sof_dir / f'search_CoxPH_on_{predict_key}'
             dir_save_interm.mkdir(parents=True, exist_ok=True)
@@ -2292,13 +2295,18 @@ def screen_nas_parameters(
     if aggregated_path.exists() and not recompute:
         if verbose > 0:
             print('Load NAS hyperparameters search results')
-        all_models = pd.read_parquet()
+        all_models = pd.read_parquet(aggregated_path)
         return all_models
     elif not aggregated_path.exists() and not recompute:
         if verbose > 0:
             print('Aggregate NAS hyperparameters search results')
         all_models = [pd.read_parquet(file_path) for file_path in dir_save_interm.glob('*.parquet')]
         if len(all_models) > 0:
+            # compatibility with older version:
+            if 'k_cluster' not in all_models[0].columns:
+                del col_types['k_cluster']
+                if verbose > 1:
+                    print('Loading older version of models, `k_cluster` was not recorded')
             all_models = pd.concat(all_models, axis=0).astype(col_types)
             all_models.index = np.arange(len(all_models))
             return all_models
@@ -2321,6 +2329,8 @@ def screen_nas_parameters(
         iter_dim_clust = [2, 3, 4, 5]
     if iter_n_neighbors is None:
         iter_n_neighbors = [15, 45, 75, 100, 200]
+    if iter_k_cluster is None:
+        iter_k_cluster = iter_n_neighbors
     if iter_metric is None:
         iter_metric = ['manhattan', 'euclidean', 'cosine']
     if iter_clusterer_type is None:
@@ -2332,12 +2342,12 @@ def screen_nas_parameters(
                 'iter_clust_size_param': range(3, 20),
             },
             'leiden': {
-                'clust_size_param_name': 'min_cluster_size',
+                'clust_size_param_name': 'resolution',
                 'iter_clust_size_param': [0.1, 0.03, 0.01, 0.003, 0.001],
             },
             'hdbscan': {
-                'clust_size_param_name': 'resolution',
-                'iter_clust_size_param': [0.1, 0.03, 0.01, 0.003, 0.001],
+                'clust_size_param_name': 'min_cluster_size',
+                'iter_clust_size_param': [50, 200],
             },
             'ecg': {
                 'clust_size_param_name': 'ecg_ensemble_size',
@@ -2354,19 +2364,24 @@ def screen_nas_parameters(
     if show_progress:
         iter_reducer_type = tqdm(iter_reducer_type, leave=False)
     for reducer_type in iter_reducer_type:
+        if reducer_type == 'none':
+            iter_dim_clust_used = [0]
+        else:
+            iter_dim_clust_used = iter_dim_clust
         if show_progress:
-            iter_dim_clust = tqdm(iter_dim_clust, leave=False)
-        for dim_clust in iter_dim_clust:
+            iter_dim_clust_used = tqdm(iter_dim_clust_used, leave=False)
+        for dim_clust in iter_dim_clust_used:
             if show_progress:
                 iter_n_neighbors = tqdm(iter_n_neighbors, leave=False)
             for n_neighbors in iter_n_neighbors:
                 if show_progress:
                     iter_metric = tqdm(iter_metric, leave=False)
                 for metric in iter_metric:
-                    iter_k_cluster = [x for x in iter_n_neighbors if x <= n_neighbors]
+                    # avoid clustering given more neighbors than what was used for dim reduction
+                    iter_k_cluster_used = [x for x in iter_k_cluster if x <= n_neighbors]
                     if show_progress:
-                        iter_k_cluster = tqdm(iter_k_cluster, leave=False)
-                    for k_cluster in iter_k_cluster:
+                        iter_k_cluster_used = tqdm(iter_k_cluster_used, leave=False)
+                    for k_cluster in iter_k_cluster_used:
                         if show_progress:
                             iter_clusterer_type = tqdm(iter_clusterer_type, leave=False)
                         for clusterer_type in iter_clusterer_type:
@@ -2396,7 +2411,7 @@ def screen_nas_parameters(
                                 
                                 # Survival analysis (just heatmap for now)
                                 niches = cluster_labels
-                                if n_clusters >= min_clust_pred:
+                                if n_clusters >= min_cluster_pred:
                                     for normalize in iter_normalize:
                                         str_params = '_'.join([str(key) + '-' + str(val) for key, val in cluster_params.items()])
                                         str_params = str_params + f'_normalize-{normalize}'
@@ -2408,6 +2423,7 @@ def screen_nas_parameters(
                                         score_roc_auc = np.nan
                                         score_ap = np.nan
                                         score_mcc = np.nan
+                                        n_coefs = np.nan
                                         score_cic = np.nan
 
                                         if results_path.exists() and not recompute:
@@ -2415,7 +2431,7 @@ def screen_nas_parameters(
                                                 print(f'load {results_path.stem}')
                                             new_model = pd.read_parquet(results_path)
                                         else:
-                                            if train_model and n_clusters < max_clust_pred:
+                                            if train_model and n_clusters < max_cluster_pred:
                                                 if verbose > 2:
                                                     print(f'compute {results_path.stem}')
                                         
@@ -2586,12 +2602,12 @@ def screen_nas_parameters(
                                             if pred_type == 'binary':
                                                 new_model.extend([score_roc_auc, score_ap, score_mcc])
                                             elif pred_type == 'survival':
-                                                new_model.extend([score_cic])
+                                                new_model.extend([n_coefs, score_cic])
                                             new_model = pd.DataFrame(data=np.array(new_model).reshape((1, -1)), columns=columns)
                                             new_model = new_model.astype(col_types)
                                             new_model.to_parquet(results_path)
                                         
-                                        all_models.append(new_model.values)
+                                        all_models.append(new_model.values.ravel())
 
     all_models = pd.DataFrame(all_models, columns=columns)
     all_models = all_models.astype(col_types)
@@ -2825,7 +2841,123 @@ def plot_niches_histogram(niches, ax=None):
     ax.bar(niche_id, niche_count, width=0.8)
     ax.set_xticks(niche_id)
     return ax
-    
+
+def plot_pca(
+    data: pd.DataFrame,
+    pca: PCA_type = None,
+    x_reduced: np.ndarray = None,
+    n_components: int = 2,
+    use_cols: Iterable = None,
+    figsize: Tuple = (7, 7),
+    scale_coords: int = True,
+    labels: Iterable = None,
+    label_colors: Union[str, Iterable] = None,
+    labels_color_mapper: dict = None,
+    legend: bool = True,
+    legend_opt: dict = None,
+    show_grid: bool = True,
+    ):
+    """
+    Perform Principal Components Analysis and plot observations in
+    reduced dimensions and variables' contributions.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Data holding original variables.
+    pca : PCA_type = None
+        Pre-computed PCA model
+    x_reduced : np.ndarray = None
+        Pre-computed reduced coordinates.
+    n_components : int = 2
+        Number of PCA's components.
+    use_cols : Iterable = None
+        Variables to use for PCA.
+    figsize : Tuple = (7, 7)
+        Figure size.
+    scale_coords : int = True
+        If True, coordinates are scaled with respect to the plot.
+    labels : Iterable = None
+        Observations' classes.
+    label_colors : str = None
+        If no label is provided, a single color or an array of 
+        colors, one for each observation.
+    labels_color_mapper : dict = None
+        Dictionnary mapping each class to a color.
+    legend : bool = True
+        If True, display a legend.
+    legend_opt : dict = None
+        Position of the legend.
+    show_grid : bool = True
+        If True, display a grid.
+    """
+
+    if use_cols is None:
+        use_cols = data.columns
+    if pca is None:
+        sc = StandardScaler()
+        X = data[use_cols]
+        X = sc.fit_transform(X)
+        pca = PCA(n_components=n_components)
+    if x_reduced is None:
+        x_reduced = pca.fit_transform(X)
+
+    score = x_reduced[:, 0:2]
+    coeff = np.transpose(pca.components_[0:2, :])
+
+    xs = score[:, 0]
+    ys = score[:, 1]
+    n_var = coeff.shape[0]
+    if scale_coords:
+        scalex = 1.0/(xs.max() - xs.min())
+        scaley = 1.0/(ys.max() - ys.min())
+    else:
+        scalex = 1.0
+        scaley = 1.0
+
+    if labels is not None:
+        uniq_labels = np.unique(labels)
+        nb_clust = len(uniq_labels)
+
+        if labels_color_mapper is None:
+            # choose colormap
+            labels_cmap = mosna.make_cluster_cmap(uniq_labels)
+            # make color mapper
+            # series to sort by decreasing order
+            n_colors = len(labels_cmap)
+            labels_color_mapper = {x: labels_cmap[i % n_colors] for i, x in enumerate(uniq_labels)}
+    else:
+        if label_colors is None:
+            label_colors = 'royalblue'
+            
+    fig, ax = plt.subplots(figsize=figsize)
+    if labels is not None:
+        for label_id in np.unique(labels):
+            select = labels == label_id
+            plt.scatter(score[select, 0]*scalex, score[select, 1]*scaley, 
+                        c=labels_color_mapper[label_id], marker='.',
+                        label=label_id);
+        if legend:
+            if legend_opt is None:
+                plt.legend()
+            else:
+                plt.legend(**legend_opt)
+    else:
+        plt.scatter(score[:, 0]*scalex, embed_scoreviz[:, 1]*scaley, c=label_colors, marker='.');
+
+    for i in range(n_var):
+        plt.arrow(0, 0, coeff[i,0], coeff[i,1], color='r', alpha=0.5)
+        if use_cols is None:
+            plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, "Var"+str(i+1), color = 'g', ha = 'center', va = 'center')
+        else:
+                plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, use_cols[i], color = 'g', ha = 'center', va = 'center')
+    plt.xlim(-1,1)
+    plt.ylim(-1,1)
+    plt.xlabel("PC{}".format(1))
+    plt.ylabel("PC{}".format(2))
+    if show_grid:
+        plt.grid()
+    return fig, ax, pca, x_reduced
 
 ###### Survival and response statistics ######
 
@@ -3277,7 +3409,10 @@ def plot_distrib_groups(
             # convert key types
             group_names = {to_type(key): val for key, val in group_names.items()}
             new_labels = [group_names[x] for x in previous_labels]
-        ax.legend(handles=handles, labels=new_labels)
+        if legend_opt is None:
+            ax.legend(handles=handles, labels=new_labels)
+        else:
+            ax.legend(handles=handles, labels=new_labels, **legend_opt)
     if ax_none:
         return fig, ax
 
@@ -3732,7 +3867,7 @@ def make_reducer_name(
 
 def get_reducer(
     data, 
-    save_dir, 
+    data_dir, 
     reducer_type='umap', 
     n_components=2, 
     n_neighbors=15, 
@@ -3751,7 +3886,7 @@ def get_reducer(
     ----------
     data : ndarray
         Dataset on which we want to apply the DR method.
-    save_dir : str or pathlib Path object
+    data_dir : str or pathlib Path object
         Directory where the DR model and transformed data are stored.
     reducer_type : str
         DR method, can be 'umap', for now, other ones coming soon.
@@ -3778,17 +3913,18 @@ def get_reducer(
     Example
     -------
     In the *mosna* pipeline, `var_aggreg` is the array of aggregated statistics:
-    >>> embedding, reducer = get_reducer(data=var_aggreg, save_dir=nas_dir)
+    >>> embedding, reducer = get_reducer(data=var_aggreg, data_dir=nas_dir)
     """
 
     reducer_name = make_reducer_name(reducer_type, n_components, n_neighbors, metric, min_dist)
-    save_dir = Path(save_dir) / reducer_name
-    file_path = save_dir / "embedding"
+    data_dir = Path(data_dir) / reducer_name
+    file_path = data_dir / "embedding"
     if os.path.exists(str(file_path) + '.npy') and not force_recompute:
-        if verbose > 0: print("Loading reducer object and reduced coordinates")
+        if verbose > 0: 
+            print("Loading reducer object and reduced coordinates")
         embedding = np.load(str(file_path) + '.npy')
-        if os.path.exists(str(save_dir / "reducer") + '.pkl'):
-            reducer = joblib.load(str(save_dir / "reducer") + '.pkl')
+        if os.path.exists(str(data_dir / "reducer") + '.pkl'):
+            reducer = joblib.load(str(data_dir / "reducer") + '.pkl')
         else:
             reducer = None
     else:
@@ -3804,7 +3940,6 @@ def get_reducer(
                 min_dist=min_dist,
                 )
             if isinstance(data, pd.DataFrame):
-
                 embedding = reducer.fit_transform(data.values)
             else:
                 embedding = reducer.fit_transform(data)
@@ -3817,18 +3952,18 @@ def get_reducer(
 
         if save_reduced_coords:
             # save reduced coordinates
-            save_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
             np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
         if save_reducer:
             # save the reducer object
-            joblib.dump(reducer, str(save_dir / "reducer") + '.pkl')
+            joblib.dump(reducer, str(data_dir / "reducer") + '.pkl')
     
     return embedding, reducer
 
 
 def get_clusterer(
         data,
-        save_dir,
+        data_dir,
         reducer_type='umap', 
         n_neighbors=15, 
         metric='manhattan', 
@@ -3858,7 +3993,7 @@ def get_clusterer(
     ----------
     data : ndarray
         Dataset on which we want to apply the DR method.
-    save_dir : str or pathlib Path object
+    data_dir : str or pathlib Path object
         Directory where the DR model and transformed data are stored.
     reducer_type : str
         DR method, can be 'umap', for now, other ones coming soon.
@@ -3894,7 +4029,7 @@ def get_clusterer(
         Whether the number of neighbors for clustering is limited by the number of
         neighbors for dimensionality reduction.
     force_recompute : bool
-        Whether computation occurs even if results already exist in `save_dir`.
+        Whether computation occurs even if results already exist in `data_dir`.
     use_gpu : boo
         If True, GMM clustering leverages GPU.
     
@@ -3929,7 +4064,7 @@ def get_clusterer(
             if n_clusters is None:
                 n_clusters = 10
     reducer_name = make_reducer_name(reducer_type, dim_clust, n_neighbors, metric, min_dist)
-    reducer_dir = Path(save_dir) / reducer_name
+    reducer_dir = Path(data_dir) / reducer_name
     k_cluster = int(k_cluster)
     if avoid_neigh_overflow and k_cluster > n_neighbors:
         if verbose > 0:
@@ -3992,7 +4127,7 @@ def get_clusterer(
     else:
         # get the embedding of data
         embedding, _ = get_reducer(
-            data, save_dir, reducer_type, dim_clust, n_neighbors, 
+            data, data_dir, reducer_type, dim_clust, n_neighbors, 
             metric, min_dist, random_state=random_state, verbose=verbose)
         if verbose > 0: 
             print("Performing clustering")
@@ -4635,9 +4770,6 @@ def logistic_regression(
         if col in X.columns:
             X.drop(columns=col, inplace=True)
     # # select groups
-    # X = X.loc[(X.loc[:, y_name] == 1) | (X.loc[:, y_name] == 2), :]
-    # y = X[y_name].values - 1  # to have resp=0, non-resp=1
-    # handled differently now: 1=resp, 0=non-resp
     y = X[y_name].values
     X = X.drop(columns=[y_name])
     var_idx = X.columns
