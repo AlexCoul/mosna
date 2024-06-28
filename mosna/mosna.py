@@ -2284,10 +2284,9 @@ def screen_nas_parameters(
             dir_save_interm = sof_dir / f'search_LogReg_on_{predict_key}'
             dir_save_interm.mkdir(parents=True, exist_ok=True)
     elif pred_type == 'survival':
-        columns.extend(['score'])
+        columns.extend(['n_coeffs', 'score'])
+        col_types['n_coeffs'] = int
         col_types['score'] = float
-        dir_save_interm = sof_dir / 'search_CoxPH'
-        dir_save_interm.mkdir(parents=True, exist_ok=True)
         if dir_save_interm is None:
             dir_save_interm = sof_dir / f'search_CoxPH_on_{predict_key}'
             dir_save_interm.mkdir(parents=True, exist_ok=True)
@@ -2415,6 +2414,7 @@ def screen_nas_parameters(
                                         score_roc_auc = np.nan
                                         score_ap = np.nan
                                         score_mcc = np.nan
+                                        n_coefs = np.nan
                                         score_cic = np.nan
 
                                         if results_path.exists() and not recompute:
@@ -2593,7 +2593,7 @@ def screen_nas_parameters(
                                             if pred_type == 'binary':
                                                 new_model.extend([score_roc_auc, score_ap, score_mcc])
                                             elif pred_type == 'survival':
-                                                new_model.extend([score_cic])
+                                                new_model.extend([n_coefs, score_cic])
                                             new_model = pd.DataFrame(data=np.array(new_model).reshape((1, -1)), columns=columns)
                                             new_model = new_model.astype(col_types)
                                             new_model.to_parquet(results_path)
