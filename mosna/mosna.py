@@ -2364,9 +2364,13 @@ def screen_nas_parameters(
     if show_progress:
         iter_reducer_type = tqdm(iter_reducer_type, leave=False)
     for reducer_type in iter_reducer_type:
+        if reducer_type == 'none':
+            iter_dim_clust_used = [0]
+        else:
+            iter_dim_clust_used = iter_dim_clust
         if show_progress:
-            iter_dim_clust = tqdm(iter_dim_clust, leave=False)
-        for dim_clust in iter_dim_clust:
+            iter_dim_clust_used = tqdm(iter_dim_clust_used, leave=False)
+        for dim_clust in iter_dim_clust_used:
             if show_progress:
                 iter_n_neighbors = tqdm(iter_n_neighbors, leave=False)
             for n_neighbors in iter_n_neighbors:
