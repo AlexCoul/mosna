@@ -2302,6 +2302,11 @@ def screen_nas_parameters(
             print('Aggregate NAS hyperparameters search results')
         all_models = [pd.read_parquet(file_path) for file_path in dir_save_interm.glob('*.parquet')]
         if len(all_models) > 0:
+            # compatibility with older version:
+            if 'k_cluster' not in all_models[0].columns:
+                del col_types['k_cluster']
+                if verbose > 1:
+                    print('Loading older version of models, `k_cluster` was not recorded')
             all_models = pd.concat(all_models, axis=0).astype(col_types)
             all_models.index = np.arange(len(all_models))
             return all_models
