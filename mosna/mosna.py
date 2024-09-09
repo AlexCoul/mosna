@@ -66,7 +66,7 @@ except:
     import leidenalg as la
     gpu_clustering = False
 from umap import UMAP
-# from pycave.bayes import GaussianMixture
+from pycave.bayes import GaussianMixture
 
 
 
