@@ -4346,6 +4346,8 @@ def merge_clusters(
 
     merged = False
     cluster_ids, cluster_sizes = np.unique(clusters, return_counts=True)
+    if len(cluster_ids) == 1:
+        return clusters, merged
     smallest_id = np.argmin(cluster_sizes)
     if size_thresh is None:
         size_thresh = np.percentile(cluster_sizes, size_perc) * ratio_size
