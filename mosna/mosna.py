@@ -32,7 +32,7 @@ from sklearn.model_selection import GridSearchCV, KFold
 from sklearn.pipeline import make_pipeline
 from sklearn.exceptions import FitFailedWarning
 from sklearn.model_selection import train_test_split
-import sklearn.metrics as metrics
+from sklearn import metrics
 from sklearn.decomposition._pca import PCA as PCA_type
 from sklearn.decomposition import PCA
 from sksurv.linear_model import CoxnetSurvivalAnalysis
@@ -2848,11 +2848,15 @@ def plot_pca(
     x_reduced: np.ndarray = None,
     n_components: int = 2,
     use_cols: Iterable = None,
+    drop_cols: Iterable = None,
+    show_var_names: bool = True,
     figsize: Tuple = (7, 7),
     scale_coords: int = True,
-    labels: Iterable = None,
-    label_colors: Union[str, Iterable] = None,
-    labels_color_mapper: dict = None,
+    group_var: str = None,
+    groups: Iterable = None,
+    group_colors: Union[str, Iterable] = None,
+    groups_color_mapper: dict = None,
+    groups_label_mapper: dict = None,
     legend: bool = True,
     legend_opt: dict = None,
     show_grid: bool = True,
@@ -2873,17 +2877,23 @@ def plot_pca(
         Number of PCA's components.
     use_cols : Iterable = None
         Variables to use for PCA.
+    show_var_names : bool = True
+        If True, display variables' names.
     figsize : Tuple = (7, 7)
         Figure size.
     scale_coords : int = True
         If True, coordinates are scaled with respect to the plot.
-    labels : Iterable = None
+    group_var : str = None
+        If provided, name of the column in `data` for groups
+    groups : Iterable = None
         Observations' classes.
-    label_colors : str = None
-        If no label is provided, a single color or an array of 
+    group_colors : str = None
+        If no group label is provided, a single color or an array of 
         colors, one for each observation.
-    labels_color_mapper : dict = None
+    groups_color_mapper : dict = None
         Dictionnary mapping each class to a color.
+    groups_label_mapper : dict = None
+        Dictionnary mapping each class to a label.
     legend : bool = True
         If True, display a legend.
     legend_opt : dict = None
@@ -2892,8 +2902,19 @@ def plot_pca(
         If True, display a grid.
     """
 
+    if group_var is not None:
+        groups = data[group_var]
+        # once we got groups, delete this columns from data for PCA
+        if drop_cols is None:
+            drop_cols = [group_var]
+        else:
+            drop_cols = drop_cols + [group_var]
+    if groups_label_mapper is not None:
+        groups = groups.map(groups_label_mapper)
     if use_cols is None:
         use_cols = data.columns
+    if drop_cols is not None:
+        use_cols = [col for col in use_cols if col not in drop_cols]
     if pca is None:
         sc = StandardScaler()
         X = data[use_cols]
@@ -2915,28 +2936,28 @@ def plot_pca(
         scalex = 1.0
         scaley = 1.0
 
-    if labels is not None:
-        uniq_labels = np.unique(labels)
-        nb_clust = len(uniq_labels)
+    if groups is not None:
+        uniq_groups = np.unique(groups)
+        nb_clust = len(uniq_groups)
 
-        if labels_color_mapper is None:
+        if groups_color_mapper is None:
             # choose colormap
-            labels_cmap = mosna.make_cluster_cmap(uniq_labels)
+            groups_cmap = mosna.make_cluster_cmap(uniq_groups)
             # make color mapper
             # series to sort by decreasing order
-            n_colors = len(labels_cmap)
-            labels_color_mapper = {x: labels_cmap[i % n_colors] for i, x in enumerate(uniq_labels)}
+            n_colors = len(groups_cmap)
+            groups_color_mapper = {x: groups_cmap[i % n_colors] for i, x in enumerate(uniq_groups)}
     else:
-        if label_colors is None:
-            label_colors = 'royalblue'
+        if group_colors is None:
+            group_colors = 'royalblue'
             
     fig, ax = plt.subplots(figsize=figsize)
-    if labels is not None:
-        for label_id in np.unique(labels):
-            select = labels == label_id
+    if groups is not None:
+        for group_id in np.unique(groups):
+            select = groups == group_id
             plt.scatter(score[select, 0]*scalex, score[select, 1]*scaley, 
-                        c=labels_color_mapper[label_id], marker='.',
-                        label=label_id);
+                        c=groups_color_mapper[group_id], marker='.',
+                        label=group_id);
         if legend:
             if legend_opt is None:
                 plt.legend()
@@ -2945,12 +2966,13 @@ def plot_pca(
     else:
         plt.scatter(score[:, 0]*scalex, embed_scoreviz[:, 1]*scaley, c=label_colors, marker='.');
 
-    for i in range(n_var):
-        plt.arrow(0, 0, coeff[i,0], coeff[i,1], color='r', alpha=0.5)
-        if use_cols is None:
-            plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, "Var"+str(i+1), color = 'g', ha = 'center', va = 'center')
-        else:
-                plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, use_cols[i], color = 'g', ha = 'center', va = 'center')
+    if show_var_names:
+        for i in range(n_var):
+            plt.arrow(0, 0, coeff[i,0], coeff[i,1], color='r', alpha=0.5)
+            if use_cols is None:
+                plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, "Var"+str(i+1), color = 'g', ha = 'center', va = 'center')
+            else:
+                    plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, use_cols[i], color = 'g', ha = 'center', va = 'center')
     plt.xlim(-1,1)
     plt.ylim(-1,1)
     plt.xlabel("PC{}".format(1))
