@@ -31,7 +31,7 @@ setup(
                       'igraph', 'leidenalg', 'openpyxl', 'odfpy',
                       'fastcluster', 'lifelines', 'hdbscan', 'umap-learn',
                       'dask', 'xgboost', 'gudhi', 'torch_geometric',
-                      'scanorama', 'pycave',
+                      'scanorama', 'torchgmm',
                       # to fix:  
                       #'torch_sparse', 
                       # 'scanit @ git+https://github.com/zcang/SCAN-IT.git',
