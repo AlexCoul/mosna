@@ -3186,7 +3186,7 @@ def extract_X_y(data, y_name, y_values=None, col_names=None, col_exclude=None, b
     y = X.loc[select, y_name]
     X = X.loc[select, col_names]
     if len(y_values) == 2 and binarize:
-        y = binarize_data(y, y_values[0], y_values[1])
+        y = binarize_data(y, zero=y_values[0], one=y_values[1])
     return X, y
 
 
@@ -4734,6 +4734,9 @@ def logistic_regression(
     save_scores=False,
     save_preds=False,
     save_plot_figures=False,
+    plot_ROC_curve=False,
+    save_ROC_curve=False,
+    display_nsamples=True,
     str_prefix='',
     figsize=(8, 8),
     verbose=1,
@@ -4747,11 +4750,12 @@ def logistic_regression(
     data : DataFrame
         Table containing predictive variables.
     y : array_like, optional
-        Response / target variable.
+        Response / target variable if it is not included in `data`.
     y_name : str, optional
-        If `y`is not provided, it is used to extract the response from `data`.
+        If `y` is not provided, it is used to extract the response from `data`.
     y_values : list, optional
         List of accepted conditions to extract observations
+        If provided, the fist value is set to zero and the second is set to one for prediction.
     col_drop : iterable, optional
         Columns to ignore in `data`
 
@@ -4794,7 +4798,6 @@ def logistic_regression(
         if col in X.columns:
             X.drop(columns=col, inplace=True)
     # # select groups
-    y = X[y_name].values
     X = X.drop(columns=[y_name])
     var_idx = X.columns
     # X = X.values
