@@ -4900,7 +4900,34 @@ def logistic_regression(
                 ax.set_ylabel('coef')
                 ax.set_title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']:.3f}")
                 if save_plot_figures:
-                    fig.savefig(dir_save / f"{str_prefix}logistic_regression_coefficients_grid-{l1_name}.jpg", bbox_inches='tight', facecolor='white', dpi=150)
+                    fig.savefig(
+                        dir_save / f"{str_prefix}logistic_regression_coefficients_grid-{l1_name}.jpg", 
+                        bbox_inches='tight', 
+                        facecolor='white', 
+                        dpi=150,
+                        )
+                
+                if plot_ROC_curve:
+                    fpr, tpr, _ = metrics.roc_curve(y_test, y_pred_proba)
+                    roc_auc = metrics.auc(fpr, tpr)
+                    fig_roc, ax_roc = plt.subplots(figsize=figsize)
+                    if display_nsamples:
+                        add_str = f"\n(n_test_samples={len(y_test)})"
+                    else:
+                        add_str = ''
+                    ax_roc.plot(fpr, tpr, color='blue', label=f'ROC curve (area = {roc_auc:.3f}){add_str}')
+                    ax_roc.plot([0, 1], [0, 1], color='gray', linestyle='--')
+                    ax_roc.legend(loc='best')
+                    ax_roc.set_xlabel('False Positive Rate')
+                    ax_roc.set_ylabel('True Positive Rate')
+                    ax_roc.set_title(f"ROC curve for {l1_name}")
+                    if save_ROC_curve:
+                        fig_roc.savefig(
+                            dir_save / f"{str_prefix}logistic_regression_ROC_curve_grid-{l1_name}.jpg", 
+                            bbox_inches='tight', 
+                            facecolor='white', 
+                            dpi=150,
+                            )
 
         else:
             score = {
