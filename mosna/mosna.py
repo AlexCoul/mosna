@@ -2005,7 +2005,7 @@ def compute_spatial_omic_features_all_networks(
     make_onehot : bool, False
         If True, convert a single column into multiple columns.
     order : int, 1 
-        Maximum order of neighborhoud for aggregation.
+        Maximum order of neighborhood for aggregation.
     id_level_1 : str
         Identifier of the first level of the dataset, like
         'patient' or 'chromosome'.
@@ -2028,6 +2028,12 @@ def compute_spatial_omic_features_all_networks(
     -------
     nas : pd.DataFrame
         Table of Neighbors Aggregated Statistics.
+
+    Notes
+    -----
+    The ordering of observations (cells) in the resulting table may differ
+    from the ordering in the original data if cell are not ordered per sample
+    or if parallel computation is used.
     """
 
     if net_dir is not None:
@@ -4489,6 +4495,7 @@ def plot_clusters(embed_viz,
                   aspect='equal',
                   return_cmap=False, 
                   figsize=(10,10),
+                  ax=None,
                   ):
     """
     Plots clustered data on its 2D projection.
@@ -4502,7 +4509,8 @@ def plot_clusters(embed_viz,
     save_dir : str or pathlib Path object
         Directory where the vizualisation is stored.
     cluster_params : dic
-        Parameters used to generate the 2D projection and clustering that are included in the file name.
+        Parameters used to generate the 2D projection and clustering to be
+        included in the file name of saved figure.
     extra_str : str
         Additional string to add in the file name to indicate manual curation
         of clustering for instance.
@@ -4512,26 +4520,24 @@ def plot_clusters(embed_viz,
     fig, ax : matplotlib figure objects.
     """
 
-    if cluster_colors is None:
-        if cluster_labels is not None:
-            nb_clust = cluster_labels.max()
-            uniq_clusters = pd.Series(cluster_labels).value_counts().index
-
+    if cluster_labels is not None:
+        nb_clust = cluster_labels.max()
+        uniq_clusters = pd.Series(cluster_labels).value_counts().index
+        if cluster_colors is None:
             # choose colormap
             clusters_cmap = make_cluster_cmap(uniq_clusters)
             # make color mapper
             # series to sort by decreasing order
             n_colors = len(clusters_cmap)
-            labels_color_mapper = {x: clusters_cmap[i % n_colors] for i, x in enumerate(uniq_clusters)}
-        else:
-            cluster_colors = 'royalblue'
+            cluster_colors = {x: clusters_cmap[i % n_colors] for i, x in enumerate(uniq_clusters)}
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
     if cluster_labels is not None:
         for clust_id in uniq_clusters:
             select = cluster_labels == clust_id
             plt.scatter(embed_viz[select, 0], embed_viz[select, 1], 
-                        c=labels_color_mapper[clust_id], marker='.',
+                        c=cluster_colors[clust_id], marker='.',
                         label=clust_id);
         if legend:
             if legend_opt is None:
@@ -4560,8 +4566,8 @@ def plot_clusters(embed_viz,
         plt.savefig(save_dir / figname, dpi=150)
 
     if return_cmap:
-        return fig, ax, labels_color_mapper
-    return fig, ax
+        return ax, cluster_colors
+    return ax
 
 
 # ------ Stepwise linear / logistic regression ------
