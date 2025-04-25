@@ -3119,8 +3119,8 @@ def binarize_data(data, zero, one):
     Tranform specific values of an array, dataframe or index into 0s and 1s.
     """
     binarized = deepcopy(data)
-    binarized[binarized == zero] = 0
-    binarized[binarized == one] = 1
+    binarized[data == zero] = 0
+    binarized[data == one] = 1
     return binarized
 
 
