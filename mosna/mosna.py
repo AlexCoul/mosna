@@ -1988,7 +1988,7 @@ def compute_spatial_omic_features_all_networks(
     stat_names: Union[str, List[str]] = 'default', 
     order: int = 1, 
     id_level_1: str = 'patient',
-    id_level_2: str = Union[str, None] = 'sample',
+    id_level_2: Union[str, None] = 'sample',
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None]=None,
     parallel_groups: Union[bool, int, str] = 'max', 
