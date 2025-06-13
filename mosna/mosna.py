@@ -3669,6 +3669,7 @@ def plot_survival_threshold(
     event_col: str, 
     thresh: float, 
     with_confidence: bool = True,
+    colors: Union[str, list, None] = 'red_green',
     ax: plt.Axes = None
     ) -> Tuple[plt.Figure, plt.Axes]:
     """
@@ -3688,6 +3689,8 @@ def plot_survival_threshold(
         Threshold applied on variable.
     with_confidence : bool
         If True, KM curves are plotted with estimated confidence intervals.
+    colors : list or None
+        If not None, sets colors for patient groups.
     ax : plt.Axes
         Existing pyplot ax if any to draw KM curves.
     
@@ -3714,12 +3717,25 @@ def plot_survival_threshold(
 
     kmf_1.fit(T[select], event_observed=E[select], label=f">   {thresh:.3g}")
     kmf_2.fit(T[~select], event_observed=E[~select], label=f"<= {thresh:.3g}")
-    if with_confidence:
-        kmf_1.plot_survival_function(ax=ax)
-        kmf_2.plot_survival_function(ax=ax)
+
+    # modify default matplotlib colormaps to get correct colors
+    if colors is not None:
+        if isinstance(colors, str) and colors == 'red_green':
+            color_inf = '#009E73' 
+            color_sup = '#F8766D'
+        else:
+            color_inf = colors[0]
+            color_sup = colors[1] 
     else:
-        kmf_1.survival_function_.plot(ax=ax)
-        kmf_2.survival_function_.plot(ax=ax)
+            color_inf = None
+            color_sup = None 
+    # plot with correct cmap
+    if with_confidence:
+        kmf_1.plot_survival_function(ax=ax, color=color_sup)
+        kmf_2.plot_survival_function(ax=ax, color=color_inf)
+    else:
+        kmf_1.survival_function_.plot(ax=ax, color=color_sup)
+        kmf_2.survival_function_.plot(ax=ax, color=color_inf)
 
     ax.set_title(f"Survival given {variable_name}")
     return fig, ax
