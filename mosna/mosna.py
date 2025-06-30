@@ -277,10 +277,50 @@ def transform_data(
     return data_out
 
 
+def make_data_index(
+    nodes_dir: Union[str, Path],
+    id_level_1: str = 'patient',
+    id_level_2: Union[str, None] = 'sample', 
+    extension: str = 'parquet',
+    ):
+    """
+    Make an index of patient and samples ids.
+    """
+
+    data_index = []
+    len_ext = len(extension) + 1
+    len_l1 = len(id_level_1) + 1
+    files = nodes_dir.glob(f'nodes_*.{extension}')
+    data_single_level = id_level_2 is None
+
+    if data_single_level:
+        for file in files:
+            # parse patient and sample description
+            file_name = file.name[6:-len_ext]
+            patient_info = file_name.split('_')[0]
+            patient_id = patient_info[len_l1:]
+            
+            # add info to data index
+            data_index.append([patient_id])
+    else:
+        len_l2 = len(id_level_2) + 1
+        for file in files:
+            # parse patient and sample description
+            file_name = file.name[6:-len_ext]
+            patient_info, sample_info = file_name.split('_')
+            patient_id = patient_info[len_l1:]
+            sample_id = sample_info[len_l2:]
+            
+            # add info to data index
+            data_index.append((patient_id, sample_id))
+
+    return data_index
+
+
 def transform_nodes(
     nodes_dir: Union[str, Path],
     id_level_1: str = 'patient',
-    id_level_2: str = 'sample', 
+    id_level_2: Union[str, None] = 'sample', 
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None] = None,
     use_cols: Union[Iterable, None] = None,
@@ -333,20 +373,12 @@ def transform_nodes(
 
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = nodes_dir.glob(f'nodes_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
 
     if save_dir == 'auto':
         save_dir = nodes_dir / f"transfo-{method}"
@@ -376,7 +408,7 @@ def transform_nodes(
 def aggregate_nodes(
     nodes_dir: Union[str, Path],
     id_level_1: str = 'patient',
-    id_level_2: str = 'sample', 
+    id_level_2: Union[str, None] = 'sample', 
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None] = None,
     use_cols: Union[Iterable, None] = None,
@@ -423,20 +455,12 @@ def aggregate_nodes(
 
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = nodes_dir.glob(f'nodes_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
     
     nodes_agg = []
     for data_info in data_index:
@@ -1364,22 +1388,12 @@ def groups_assort_mixmat(
     
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = net_dir.glob(f'edges_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # print(file)
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
     
     groups_data = []
     
@@ -1974,7 +1988,7 @@ def compute_spatial_omic_features_all_networks(
     stat_names: Union[str, List[str]] = 'default', 
     order: int = 1, 
     id_level_1: str = 'patient',
-    id_level_2: str = 'sample', 
+    id_level_2: Union[str, None] = 'sample',
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None]=None,
     parallel_groups: Union[bool, int, str] = 'max', 
@@ -2056,22 +2070,12 @@ def compute_spatial_omic_features_all_networks(
     
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = edges_dir.glob(f'edges_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # print(file)
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
     
     groups_data = []
     
