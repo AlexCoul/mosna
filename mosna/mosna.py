@@ -2798,6 +2798,82 @@ def make_cluster_cmap(labels, grey_pos='end', saturated_first=True, as_mpl_cmap=
     return cmap
 
 
+def aggregate_cell_types(
+    var_aggreg_samples_info: pd.DataFrame,
+    cohort_data: pd.DataFrame,
+    pheno_col: str,
+    patient_col: str,
+    sample_col: str,
+    nodes_dir: Path = None,
+    file_name: str = 'cell_types.npy',
+    save_data: bool = True,
+    force_recompute: bool = False,
+    ):
+    """
+    Aggregate cell types in the same order of patients and samples
+    IDs as for the Neighbors Aggregation Statistics method.
+
+    Parameters
+    ----------
+    var_aggreg : pd.DataFrame
+        Aggregated statistics of omics data for each cell's neighborhood.
+    cohort_data : pd.DataFrame
+        Data from the cohort per cell, including patients and samples IDs, 
+        and cell types.
+    pheno_col : str
+        Column name of cell types.
+    patient_col : str
+        Column name of patients IDs
+    sample_col : str
+        Column name of samples IDs
+    nodes_dir : Path or None
+        Path to nodes data directory.
+    file_name : str
+        Name for the aggregated cell types file.
+    save_data : bool
+        If True, save aggregated data to disk.
+    force_recompute : bool
+        If True, recompute aggregated cell types even if 
+        present on disk.
+
+    Returns
+    -------
+    cell_types : np.array
+        Numpy array of cell types.        
+    """
+
+    if nodes_dir is not None:
+        path_cell_types = nodes_dir / file_name
+        if path_cell_types.exists() and not force_recompute:
+            print("Loading cell types in correct order")
+            cell_types = np.load(path_cell_types, allow_pickle=True)
+            return cell_types
+
+    print("Aggregating cell types in correct order")
+    # pairs of patient id and sample id
+    uniq_pairs = var_aggreg_samples_info.drop_duplicates()
+
+    all_cell_types = []
+    for idx, patient_id, sample_id in tqdm(uniq_pairs.itertuples()):
+        cell_types = cohort_data.loc[
+                        (cohort_data[patient_col] == patient_id) &
+                        (cohort_data[sample_col] == int(sample_id)),
+                        pheno_col,
+                        ]
+        all_cell_types.append(cell_types.values)
+    cell_types = np.hstack([*all_cell_types])
+    print(f'Concatenated {cell_types.size} cells')
+    
+    if save_data:
+        if nodes_dir is not None:
+            path_cell_types = nodes_dir / file_name
+            np.save(path_cell_types, cell_types)
+        else:
+            print("Provide `nodes_dir` to save aggregated cell types data.")
+    
+    return cell_types
+
+
 def make_niches_composition(var, niches, var_label='variable', normalize='total'):
     """
     Make a counts matrix of cell types composition of niches.
