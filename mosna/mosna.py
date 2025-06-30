@@ -3751,6 +3751,7 @@ def plot_survival_coeffs(
     columns=None, 
     p_thresh=None,
     hazard_ratios=False, 
+    sort_coefficients=True,
     colors=None, 
     min_size=1,
     max_size=5,
@@ -3776,6 +3777,8 @@ def plot_survival_coeffs(
         The p-value threshold used to filter out coefficients of the CoxPH model.
     hazard_ratios: bool, optional
         by default, ``plot`` will present the log-hazard ratios (the coefficients). However, by turning this flag to True, the hazard ratios are presented instead.
+    sort_coefficients: bool, optional
+        Sort coefficients for plotting.
     errorbar_kwargs:
         pass in additional plotting commands to matplotlib errorbar command
 
@@ -3804,20 +3807,19 @@ def plot_survival_coeffs(
     errorbar_kwargs.setdefault("capsize", None)
 
     z = inv_normal_cdf(1 - model.alpha / 2)
-    user_supplied_columns = True
 
     if columns is None:
-        user_supplied_columns = False
         columns = model.params_.index
 
     if p_thresh is not None:
         assert 0.0 < p_thresh < 1.0
-        columns = model.summary.index[model.summary['p'] <= p_thresh]
+        pval_columns = model.summary.index[model.summary['p'] <= p_thresh]
+        columns = [x for x in columns if x in pval_columns]
 
     yaxis_locations = np.arange(len(columns))
     log_hazards = model.params_.loc[columns].values.copy()
 
-    order = list(range(len(columns) - 1, -1, -1)) if user_supplied_columns else np.argsort(log_hazards)
+    order = list(range(len(columns) - 1, -1, -1)) if not sort_coefficients else np.argsort(log_hazards)
 
     if colors is None:
         if auto_colors:
