@@ -3750,7 +3750,8 @@ def plot_survival_threshold(
     thresh: float, 
     with_confidence: bool = True,
     colors: Union[str, list, None] = 'red_green',
-    ax: plt.Axes = None
+    ax: plt.Axes = None,
+    figsize: Iterable = (8, 5),
     ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot Kaplan-Meier curves of observations discriminated by a threshold.
@@ -3773,6 +3774,8 @@ def plot_survival_threshold(
         If not None, sets colors for patient groups.
     ax : plt.Axes
         Existing pyplot ax if any to draw KM curves.
+    figsize: Iterable = (6, 4)
+        Size of the figure to display.
     
     Returns
     -------
@@ -3791,7 +3794,7 @@ def plot_survival_threshold(
     select = (variable > thresh)
 
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.get_figure()
 
