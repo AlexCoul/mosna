@@ -2907,22 +2907,22 @@ def make_niches_composition(var, niches, var_label='variable', normalize='total'
     return counts
 
 
-def plot_niches_composition(counts=None, var=None, niches=None, var_label='variable', normalize='total'):
+def plot_niches_composition(counts=None, var=None, niches=None, var_label='variable', normalize='total', figsize=None):
     """
     Make a matrix plot of cell types composition of niches.
     """
     if counts is None:
         counts = make_niches_composition(var, niches, var_label='variable', normalize=normalize)
     
-    plt.figure()
+    plt.figure(figsize=figsize)
     fig = sns.heatmap(counts, linewidths=.5, cmap=sns.color_palette("Blues", as_cmap=True),
                       xticklabels=True, yticklabels=True)
     return fig
 
 
-def plot_niches_histogram(niches, ax=None):
+def plot_niches_histogram(niches, ax=None, figsize=None):
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
     niche_id, niche_count = np.unique(niches, return_counts=True)
     ax.bar(niche_id, niche_count, width=0.8)
     ax.set_xticks(niche_id)
@@ -3839,6 +3839,7 @@ def plot_survival_coeffs(
     default_color='royalblue',
     y_ticks_coeff=0.25,
     ax=None, 
+    figsize=None,
     **errorbar_kwargs,
     ):
     """
@@ -3876,7 +3877,7 @@ def plot_survival_coeffs(
     from matplotlib import pyplot as plt
 
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
 
     errorbar_kwargs.setdefault("c", "k")
     errorbar_kwargs.setdefault("fmt", "o")
