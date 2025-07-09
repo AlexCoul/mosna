@@ -277,10 +277,50 @@ def transform_data(
     return data_out
 
 
+def make_data_index(
+    nodes_dir: Union[str, Path],
+    id_level_1: str = 'patient',
+    id_level_2: Union[str, None] = 'sample', 
+    extension: str = 'parquet',
+    ):
+    """
+    Make an index of patient and samples ids.
+    """
+
+    data_index = []
+    len_ext = len(extension) + 1
+    len_l1 = len(id_level_1) + 1
+    files = nodes_dir.glob(f'nodes_*.{extension}')
+    data_single_level = id_level_2 is None
+
+    if data_single_level:
+        for file in files:
+            # parse patient and sample description
+            file_name = file.name[6:-len_ext]
+            patient_info = file_name.split('_')[0]
+            patient_id = patient_info[len_l1:]
+            
+            # add info to data index
+            data_index.append([patient_id])
+    else:
+        len_l2 = len(id_level_2) + 1
+        for file in files:
+            # parse patient and sample description
+            file_name = file.name[6:-len_ext]
+            patient_info, sample_info = file_name.split('_')
+            patient_id = patient_info[len_l1:]
+            sample_id = sample_info[len_l2:]
+            
+            # add info to data index
+            data_index.append((patient_id, sample_id))
+
+    return data_index
+
+
 def transform_nodes(
     nodes_dir: Union[str, Path],
     id_level_1: str = 'patient',
-    id_level_2: str = 'sample', 
+    id_level_2: Union[str, None] = 'sample', 
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None] = None,
     use_cols: Union[Iterable, None] = None,
@@ -333,20 +373,12 @@ def transform_nodes(
 
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = nodes_dir.glob(f'nodes_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
 
     if save_dir == 'auto':
         save_dir = nodes_dir / f"transfo-{method}"
@@ -376,7 +408,7 @@ def transform_nodes(
 def aggregate_nodes(
     nodes_dir: Union[str, Path],
     id_level_1: str = 'patient',
-    id_level_2: str = 'sample', 
+    id_level_2: Union[str, None] = 'sample', 
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None] = None,
     use_cols: Union[Iterable, None] = None,
@@ -423,20 +455,12 @@ def aggregate_nodes(
 
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = nodes_dir.glob(f'nodes_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
     
     nodes_agg = []
     for data_info in data_index:
@@ -1364,22 +1388,12 @@ def groups_assort_mixmat(
     
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = net_dir.glob(f'edges_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # print(file)
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
     
     groups_data = []
     
@@ -1974,7 +1988,7 @@ def compute_spatial_omic_features_all_networks(
     stat_names: Union[str, List[str]] = 'default', 
     order: int = 1, 
     id_level_1: str = 'patient',
-    id_level_2: str = 'sample', 
+    id_level_2: Union[str, None] = 'sample',
     extension: str = 'parquet',
     data_index: Union[List[Tuple], None]=None,
     parallel_groups: Union[bool, int, str] = 'max', 
@@ -2056,22 +2070,12 @@ def compute_spatial_omic_features_all_networks(
     
     # build index of patients and samples files
     if data_index is None:
-        data_index = []
-        len_ext = len(extension) + 1
-        len_l1 = len(id_level_1) + 1
-        len_l2 = len(id_level_2) + 1
-        files = edges_dir.glob(f'edges_*.{extension}')
-        if not data_single_level:
-            for file in files:
-                # print(file)
-                # parse patient and sample description
-                file_name = file.name[6:-len_ext]
-                patient_info, sample_info = file_name.split('_')
-                patient_id = patient_info[len_l1:]
-                sample_id = sample_info[len_l2:]
-                
-                # add info to data index
-                data_index.append((patient_id, sample_id))
+        data_index = make_data_index(
+            nodes_dir,
+            id_level_1,
+            id_level_2, 
+            extension,
+            )
     
     groups_data = []
     
@@ -2794,6 +2798,82 @@ def make_cluster_cmap(labels, grey_pos='end', saturated_first=True, as_mpl_cmap=
     return cmap
 
 
+def aggregate_cell_types(
+    var_aggreg_samples_info: pd.DataFrame,
+    cohort_data: pd.DataFrame,
+    pheno_col: str,
+    patient_col: str,
+    sample_col: str,
+    nodes_dir: Path = None,
+    file_name: str = 'cell_types.npy',
+    save_data: bool = True,
+    force_recompute: bool = False,
+    ):
+    """
+    Aggregate cell types in the same order of patients and samples
+    IDs as for the Neighbors Aggregation Statistics method.
+
+    Parameters
+    ----------
+    var_aggreg : pd.DataFrame
+        Aggregated statistics of omics data for each cell's neighborhood.
+    cohort_data : pd.DataFrame
+        Data from the cohort per cell, including patients and samples IDs, 
+        and cell types.
+    pheno_col : str
+        Column name of cell types.
+    patient_col : str
+        Column name of patients IDs
+    sample_col : str
+        Column name of samples IDs
+    nodes_dir : Path or None
+        Path to nodes data directory.
+    file_name : str
+        Name for the aggregated cell types file.
+    save_data : bool
+        If True, save aggregated data to disk.
+    force_recompute : bool
+        If True, recompute aggregated cell types even if 
+        present on disk.
+
+    Returns
+    -------
+    cell_types : np.array
+        Numpy array of cell types.        
+    """
+
+    if nodes_dir is not None:
+        path_cell_types = nodes_dir / file_name
+        if path_cell_types.exists() and not force_recompute:
+            print("Loading cell types in correct order")
+            cell_types = np.load(path_cell_types, allow_pickle=True)
+            return cell_types
+
+    print("Aggregating cell types in correct order")
+    # pairs of patient id and sample id
+    uniq_pairs = var_aggreg_samples_info.drop_duplicates()
+
+    all_cell_types = []
+    for idx, patient_id, sample_id in tqdm(uniq_pairs.itertuples()):
+        cell_types = cohort_data.loc[
+                        (cohort_data[patient_col] == patient_id) &
+                        (cohort_data[sample_col] == int(sample_id)),
+                        pheno_col,
+                        ]
+        all_cell_types.append(cell_types.values)
+    cell_types = np.hstack([*all_cell_types])
+    print(f'Concatenated {cell_types.size} cells')
+    
+    if save_data:
+        if nodes_dir is not None:
+            path_cell_types = nodes_dir / file_name
+            np.save(path_cell_types, cell_types)
+        else:
+            print("Provide `nodes_dir` to save aggregated cell types data.")
+    
+    return cell_types
+
+
 def make_niches_composition(var, niches, var_label='variable', normalize='total'):
     """
     Make a counts matrix of cell types composition of niches.
@@ -2827,22 +2907,22 @@ def make_niches_composition(var, niches, var_label='variable', normalize='total'
     return counts
 
 
-def plot_niches_composition(counts=None, var=None, niches=None, var_label='variable', normalize='total'):
+def plot_niches_composition(counts=None, var=None, niches=None, var_label='variable', normalize='total', figsize=None):
     """
     Make a matrix plot of cell types composition of niches.
     """
     if counts is None:
         counts = make_niches_composition(var, niches, var_label='variable', normalize=normalize)
     
-    plt.figure()
+    plt.figure(figsize=figsize)
     fig = sns.heatmap(counts, linewidths=.5, cmap=sns.color_palette("Blues", as_cmap=True),
                       xticklabels=True, yticklabels=True)
     return fig
 
 
-def plot_niches_histogram(niches, ax=None):
+def plot_niches_histogram(niches, ax=None, figsize=None):
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
     niche_id, niche_count = np.unique(niches, return_counts=True)
     ax.bar(niche_id, niche_count, width=0.8)
     ax.set_xticks(niche_id)
@@ -3669,7 +3749,9 @@ def plot_survival_threshold(
     event_col: str, 
     thresh: float, 
     with_confidence: bool = True,
-    ax: plt.Axes = None
+    colors: Union[str, list, None] = 'red_green',
+    ax: plt.Axes = None,
+    figsize: Iterable = (8, 5),
     ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot Kaplan-Meier curves of observations discriminated by a threshold.
@@ -3688,8 +3770,12 @@ def plot_survival_threshold(
         Threshold applied on variable.
     with_confidence : bool
         If True, KM curves are plotted with estimated confidence intervals.
+    colors : list or None
+        If not None, sets colors for patient groups.
     ax : plt.Axes
         Existing pyplot ax if any to draw KM curves.
+    figsize: Iterable = (6, 4)
+        Size of the figure to display.
     
     Returns
     -------
@@ -3708,18 +3794,31 @@ def plot_survival_threshold(
     select = (variable > thresh)
 
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.get_figure()
 
     kmf_1.fit(T[select], event_observed=E[select], label=f">   {thresh:.3g}")
     kmf_2.fit(T[~select], event_observed=E[~select], label=f"<= {thresh:.3g}")
-    if with_confidence:
-        kmf_1.plot_survival_function(ax=ax)
-        kmf_2.plot_survival_function(ax=ax)
+
+    # modify default matplotlib colormaps to get correct colors
+    if colors is not None:
+        if isinstance(colors, str) and colors == 'red_green':
+            color_inf = '#009E73' 
+            color_sup = '#F8766D'
+        else:
+            color_inf = colors[0]
+            color_sup = colors[1] 
     else:
-        kmf_1.survival_function_.plot(ax=ax)
-        kmf_2.survival_function_.plot(ax=ax)
+            color_inf = None
+            color_sup = None 
+    # plot with correct cmap
+    if with_confidence:
+        kmf_1.plot_survival_function(ax=ax, color=color_sup)
+        kmf_2.plot_survival_function(ax=ax, color=color_inf)
+    else:
+        kmf_1.survival_function_.plot(ax=ax, color=color_sup)
+        kmf_2.survival_function_.plot(ax=ax, color=color_inf)
 
     ax.set_title(f"Survival given {variable_name}")
     return fig, ax
@@ -3731,6 +3830,7 @@ def plot_survival_coeffs(
     columns=None, 
     p_thresh=None,
     hazard_ratios=False, 
+    sort_coefficients=True,
     colors=None, 
     min_size=1,
     max_size=5,
@@ -3739,6 +3839,7 @@ def plot_survival_coeffs(
     default_color='royalblue',
     y_ticks_coeff=0.25,
     ax=None, 
+    figsize=None,
     **errorbar_kwargs,
     ):
     """
@@ -3756,6 +3857,8 @@ def plot_survival_coeffs(
         The p-value threshold used to filter out coefficients of the CoxPH model.
     hazard_ratios: bool, optional
         by default, ``plot`` will present the log-hazard ratios (the coefficients). However, by turning this flag to True, the hazard ratios are presented instead.
+    sort_coefficients: bool, optional
+        Sort coefficients for plotting.
     errorbar_kwargs:
         pass in additional plotting commands to matplotlib errorbar command
 
@@ -3774,7 +3877,7 @@ def plot_survival_coeffs(
     from matplotlib import pyplot as plt
 
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
 
     errorbar_kwargs.setdefault("c", "k")
     errorbar_kwargs.setdefault("fmt", "o")
@@ -3784,20 +3887,19 @@ def plot_survival_coeffs(
     errorbar_kwargs.setdefault("capsize", None)
 
     z = inv_normal_cdf(1 - model.alpha / 2)
-    user_supplied_columns = True
 
     if columns is None:
-        user_supplied_columns = False
         columns = model.params_.index
 
     if p_thresh is not None:
         assert 0.0 < p_thresh < 1.0
-        columns = model.summary.index[model.summary['p'] <= p_thresh]
+        pval_columns = model.summary.index[model.summary['p'] <= p_thresh]
+        columns = [x for x in columns if x in pval_columns]
 
     yaxis_locations = np.arange(len(columns))
     log_hazards = model.params_.loc[columns].values.copy()
 
-    order = list(range(len(columns) - 1, -1, -1)) if user_supplied_columns else np.argsort(log_hazards)
+    order = list(range(len(columns) - 1, -1, -1)) if not sort_coefficients else np.argsort(log_hazards)
 
     if colors is None:
         if auto_colors:
