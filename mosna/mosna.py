@@ -29,6 +29,7 @@ from sklearn.impute import KNNImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn import linear_model
 from sklearn.model_selection import GridSearchCV, KFold
+from sklearn.metrics import confusion_matrix
 from sklearn.pipeline import make_pipeline
 from sklearn.exceptions import FitFailedWarning
 from sklearn.model_selection import train_test_split
@@ -4845,10 +4846,12 @@ def logistic_regression(
     test_size=0.25,
     dir_save=None,
     plot_coefs=True,
+    save_plot_coefs=False,
     save_coefs=False,
     save_scores=False,
     save_preds=False,
-    save_plot_figures=False,
+    plot_confusion_matrix=True,
+    save_confusion_matrix=False,
     plot_ROC_curve=False,
     save_ROC_curve=False,
     display_nsamples=True,
@@ -4919,7 +4922,7 @@ def logistic_regression(
 
     start = time()
 
-    models = {}
+    models = dict()
     for l1_name, l1_ratios in l1_ratios_list:
 
         if split_train_test:
@@ -4966,10 +4969,13 @@ def logistic_regression(
                 else:
                     print(f"        training failed")
                     break
-            
+        
+        models[l1_name] = {'model': clf}
+
         if training_succeeded:
             y_pred_proba = clf.predict_proba(X_test)[:, 1]
             y_pred = clf.predict(X_test)
+
             score = {
                 'ROC AUC': metrics.roc_auc_score(y_test, y_pred_proba),
                 'AP' : metrics.average_precision_score(y_test, y_pred_proba),
@@ -4989,14 +4995,22 @@ def logistic_regression(
             nb_coef = coef.shape[0]
             if save_coefs:
                 coef.to_csv(dir_save / f"LogisticRegressionCV_coefficients.csv")
-            
+        
+            fpr, tpr, roc_thresholds = metrics.roc_curve(y_test, y_pred_proba)
+            j_scores = tpr - fpr  # Youden's J = sensitivity - (1 - specificity)
+            best_roc_threshold = roc_thresholds[np.argmax(j_scores)]
+            roc_auc = metrics.auc(fpr, tpr)
+            y_pred = (y_pred_proba >= best_roc_threshold).astype(int)
+
+            preds = pd.DataFrame(data={'y_pred_proba': y_pred_proba,
+                                        'y_pred': y_pred,
+                                        'y_test': np.array(y_test)},
+                                    index=test_index)
+            models[l1_name]['preds'] = preds
+            models[l1_name]['l1_ratio'] = l1_ratio
+            models[l1_name]['C'] = C
+            models[l1_name]['best_roc_threshold'] = best_roc_threshold
             if save_preds:
-                preds = pd.DataFrame(data={'y_pred_proba': y_pred_proba,
-                                           'y_pred': y_pred,
-                                           'y_test': y_test,
-                                           'l1_ratio': l1_ratio,
-                                           'C': C},
-                                     index=test_index)
                 preds.to_csv(dir_save / f'{str_prefix}logistic_regression_predictions_{l1_name}.csv')
             
             if plot_coefs:
@@ -5014,36 +5028,51 @@ def logistic_regression(
                 ax.set_xlabel('variables')
                 ax.set_ylabel('coef')
                 ax.set_title(f" l1_ratio {l1_ratio}, C {C}, AUC {score['ROC AUC']:.3f}")
-                if save_plot_figures:
+                if save_plot_coefs:
                     fig.savefig(
                         dir_save / f"{str_prefix}logistic_regression_coefficients_grid-{l1_name}.jpg", 
                         bbox_inches='tight', 
                         facecolor='white', 
                         dpi=150,
                         )
-                
-                if plot_ROC_curve:
-                    fpr, tpr, _ = metrics.roc_curve(y_test, y_pred_proba)
-                    roc_auc = metrics.auc(fpr, tpr)
-                    fig_roc, ax_roc = plt.subplots(figsize=figsize)
-                    if display_nsamples:
-                        add_str = f"\n(n_test_samples={len(y_test)})"
-                    else:
-                        add_str = ''
-                    ax_roc.plot(fpr, tpr, color='blue', label=f'ROC curve (area = {roc_auc:.3f}){add_str}')
-                    ax_roc.plot([0, 1], [0, 1], color='gray', linestyle='--')
-                    ax_roc.legend(loc='best')
-                    ax_roc.set_xlabel('False Positive Rate')
-                    ax_roc.set_ylabel('True Positive Rate')
-                    ax_roc.set_title(f"ROC curve for {l1_name}")
-                    if save_ROC_curve:
-                        fig_roc.savefig(
-                            dir_save / f"{str_prefix}logistic_regression_ROC_curve_grid-{l1_name}.jpg", 
-                            bbox_inches='tight', 
-                            facecolor='white', 
-                            dpi=150,
-                            )
 
+            if plot_ROC_curve:
+                fig_roc, ax_roc = plt.subplots(figsize=figsize)
+                if display_nsamples:
+                    add_str = f"\n(n_test_samples={len(y_test)})"
+                else:
+                    add_str = ''
+                ax_roc.plot(fpr, tpr, color='blue', label=f'ROC curve (area = {roc_auc:.3f}){add_str}')
+                ax_roc.plot([0, 1], [0, 1], color='gray', linestyle='--')
+                ax_roc.legend(loc='best')
+                ax_roc.set_xlabel('False Positive Rate')
+                ax_roc.set_ylabel('True Positive Rate')
+                ax_roc.set_title(f"ROC curve for {l1_name}")
+                if save_ROC_curve:
+                    fig_roc.savefig(
+                        dir_save / f"{str_prefix}logistic_regression_ROC_curve_grid-{l1_name}.jpg", 
+                        bbox_inches='tight', 
+                        facecolor='white', 
+                        dpi=150,
+                        )
+            
+            if plot_confusion_matrix:
+                cm = confusion_matrix(y_test, y_pred)
+
+                fig_cm, ax_cm = plt.subplots(figsize=(4, 4))
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                            xticklabels=['Pred 0', 'Pred 1'],
+                            yticklabels=['True 0', 'True 1'])
+                plt.xlabel('Predicted')
+                plt.ylabel('Actual')
+                plt.title(f'Confusion Matrix (Threshold = {best_roc_threshold:.2f})')
+                if save_confusion_matrix:
+                    fig_cm.savefig(
+                        dir_save / f"{str_prefix}logistic_regression_confusion_matrix_grid-{l1_name}.jpg", 
+                        bbox_inches='tight', 
+                        facecolor='white', 
+                        dpi=150,
+                        )
         else:
             score = {
                 'ROC AUC': np.nan,
@@ -5053,14 +5082,11 @@ def logistic_regression(
             coef = None
             print(f"        training failed with cv <= {cv_max}")
                 
-        models[l1_name] = {
-            'model': clf,
-            'score': score,
-            'coef': coef,
-        }
+        models[l1_name]['score'] = score
+        models[l1_name]['coef'] : coef
 
-        scores = pd.DataFrame.from_dict(score, orient='index')
         if save_scores:
+            scores = pd.DataFrame.from_dict(score, orient='index')
             scores.to_csv(dir_save / 'scores_niches.csv')
 
     end = time()
