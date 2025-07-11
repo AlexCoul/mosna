@@ -3013,6 +3013,9 @@ def plot_pca(
     score = x_reduced[:, 0:2]
     coeff = np.transpose(pca.components_[0:2, :])
 
+    # Get variance explained
+    explained_var = pca.explained_variance_ratio_ * 100  # Convert to percentage
+
     xs = score[:, 0]
     ys = score[:, 1]
     n_var = coeff.shape[0]
@@ -3062,8 +3065,8 @@ def plot_pca(
                     plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, use_cols[i], color = 'g', ha = 'center', va = 'center')
     plt.xlim(-1,1)
     plt.ylim(-1,1)
-    plt.xlabel("PC{}".format(1))
-    plt.ylabel("PC{}".format(2))
+    plt.xlabel(f"PC1 ({explained_var[0]:.1f}%)")
+    plt.ylabel(f"PC2 ({explained_var[1]:.1f}%)")
     if show_grid:
         plt.grid()
     return fig, ax, pca, x_reduced
