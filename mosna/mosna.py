@@ -3418,6 +3418,7 @@ def plot_distrib_groups(
     figsize=(20, 6), 
     fontsize=20, 
     orientation=30, 
+    palette='red_green', # or Set2
     legend_opt=None,
     ax=None,
     plot_type='boxplot', 
@@ -3495,13 +3496,19 @@ def plot_distrib_groups(
     else:
         split = False
     
+    # manage colors
+    if palette is not None:
+        if isinstance(palette, str) and palette == 'red_green':
+            palette = ['#F8766D', '#009E73']
+            # else palette is the standard name of a palette
+    
     # TODO: display variables on different axes if the have very differents ranges
     if plot_type == 'boxplot':
         sns.boxplot(x=var_name, y=value_name, hue=group_var, 
-                    data=long, palette="Set2", ax=ax);
+                    data=long, palette=palette, ax=ax);
     elif plot_type == 'violinplot':
         sns.violinplot(x=var_name, y=value_name, hue=group_var, 
-                       data=long, palette="Set2", split=split, ax=ax);
+                       data=long, palette=palette, split=split, ax=ax);
     if add_points:
         sns.stripplot(long, x=var_name, y=value_name, hue=group_var, 
                       dodge=True, size=4, palette='dark:.3', legend=None);
