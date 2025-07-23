@@ -3413,6 +3413,7 @@ def plot_distrib_groups(
     pval_thresh=0.05, 
     test='Mann-Whitney',
     max_cols=-1, 
+    n_cols=None,
     exclude_vars=None, 
     id_vars=None, 
     var_name='variable', 
@@ -3448,10 +3449,13 @@ def plot_distrib_groups(
             pval_data = find_DE_markers(data, groups[0], groups[1], group_var=group_var, composed_order=0, test=test)
         nb_vars = np.sum(pval_data[pval_col] <= pval_thresh)
         print(f'There are {nb_vars} significant variables in `{pval_col}`')
-        if nb_vars == 0:
-            nb_vars = len(pval_data)
-        if max_cols > 0:
-            nb_vars = min(nb_vars, max_cols)
+        if n_cols is not None:
+            nb_vars = n_cols
+        else:
+            if nb_vars == 0:
+                nb_vars = len(pval_data)
+            if max_cols > 0:
+                nb_vars = min(nb_vars, max_cols)
         marker_vars = pval_data.sort_values(by=pval_col, ascending=True).head(nb_vars).index.tolist()
     else:
         marker_vars = data.columns.tolist()
@@ -4847,6 +4851,7 @@ def logistic_regression(
     l1_ratios_list='auto', 
     split_train_test=True,
     test_size=0.25,
+    compare_null_model=True,
     dir_save=None,
     plot_coefs=True,
     save_plot_coefs=False,
@@ -5084,13 +5089,49 @@ def logistic_regression(
             }
             coef = None
             print(f"        training failed with cv <= {cv_max}")
+
+        if compare_null_model:
+            y_shuffled = shuffle(y, random_state=0)
+
+            if split_train_test:
+                # stratify train / test by response
+                np.random.seed(0)
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y_shuffled, 
+                    test_size=test_size, 
+                    random_state=0, 
+                    shuffle=True, 
+                )
+            else:
+                X_train = X
+                X_test = X
+                y_train = y_shuffled
+                y_test = y_shuffled
+            test_index = X_test.index
+            # Standardize data to give same weight to regularization
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test = scaler.transform(X_test)   
+
+            clf.fit(X_train, y_train)
+
+            y_pred_proba = clf.predict_proba(X_test)[:, 1]
+            fpr, tpr, roc_thresholds = metrics.roc_curve(y_test, y_pred_proba)
+            j_scores = tpr - fpr  # Youden's J = sensitivity - (1 - specificity)
+            best_roc_threshold = roc_thresholds[np.argmax(j_scores)]
+            roc_auc = metrics.auc(fpr, tpr)
+            y_pred = (y_pred_proba >= best_roc_threshold).astype(int)
+
+            score['ROC AUC Null Model'] = roc_auc
+            score['AP Null Model'] = metrics.average_precision_score(y_test, y_pred_proba)
+            score['MCC Null Model'] = metrics.matthews_corrcoef(y_test, y_pred)
                 
         models[l1_name]['score'] = score
-        models[l1_name]['coef'] : coef
+        models[l1_name]['coef'] = coef
 
         if save_scores:
             scores = pd.DataFrame.from_dict(score, orient='index')
-            scores.to_csv(dir_save / 'scores_niches.csv')
+            scores.to_csv(dir_save / f'{str_prefix}logistic_regression_scores_grid-{l1_name}.csv')
 
     end = time()
     duration = end - start
