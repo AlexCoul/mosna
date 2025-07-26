@@ -3420,6 +3420,7 @@ def plot_distrib_groups(
     value_name='value', 
     group_names=None,
     multi_ind_to_col=False, 
+    scale_data=False,
     figsize=(20, 6), 
     fontsize=20, 
     orientation=30, 
@@ -3484,6 +3485,9 @@ def plot_distrib_groups(
     # select desired groups
     select = np.any([wide[group_var] == i for i in groups], axis=0)
     wide = wide.loc[select, :]
+
+    if scale_data:
+        wide.loc[:, marker_vars] = StandardScaler().fit_transform(wide.loc[:, marker_vars])
 
     long = pd.melt(
         wide, 
