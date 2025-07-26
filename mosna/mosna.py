@@ -5040,8 +5040,8 @@ def logistic_regression(
                 nb_coef_plot = min(20, nb_coef)
                 labels = coef.index[:nb_coef_plot]
 
-                fig, ax = plt.subplots(figsize=figsize)
-                ax = coef.loc[labels, 'coef'].to_frame().plot.bar(ax=ax)
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax = coef.loc[labels, 'coef'].to_frame().plot.bar(ax=ax, color='#a6a6a6')
                 ax.hlines(y=0, xmin=0, xmax=nb_coef_plot-1, colors='gray', linestyles='dashed')
                 ticks_pos = np.linspace(start=0, stop=nb_coef_plot-1, num=nb_coef_plot)
                 # ticks_label = np.round(ticks_label, decimals=2)
