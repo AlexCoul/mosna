@@ -3420,6 +3420,7 @@ def plot_distrib_groups(
     value_name='value', 
     group_names=None,
     multi_ind_to_col=False, 
+    scale_data=False,
     figsize=(20, 6), 
     fontsize=20, 
     orientation=30, 
@@ -3484,6 +3485,9 @@ def plot_distrib_groups(
     # select desired groups
     select = np.any([wide[group_var] == i for i in groups], axis=0)
     wide = wide.loc[select, :]
+
+    if scale_data:
+        wide.loc[:, marker_vars] = StandardScaler().fit_transform(wide.loc[:, marker_vars])
 
     long = pd.melt(
         wide, 
@@ -4020,7 +4024,8 @@ def get_reducer(
     min_dist=0.0, 
     force_recompute=False,
     save_reduced_coords=True, 
-    save_reducer=False, 
+    save_reducer=False,
+    return_path_coords=False, 
     random_state=None, 
     verbose=1,
     ):
@@ -4095,14 +4100,17 @@ def get_reducer(
             else:
                 embedding = data
 
+        path_coords = str(file_path) + '.npy'
         if save_reduced_coords:
             # save reduced coordinates
             data_dir.mkdir(parents=True, exist_ok=True)
-            np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
+            np.save(path_coords, embedding, allow_pickle=False, fix_imports=False)
         if save_reducer:
             # save the reducer object
             joblib.dump(reducer, str(data_dir / "reducer") + '.pkl')
     
+    if return_path_coords:
+        return embedding, reducer, path_coords
     return embedding, reducer
 
 
@@ -4608,6 +4616,7 @@ def plot_clusters(embed_viz,
                   show_id=True,
                   legend=True, 
                   legend_opt=None,
+                  sort_legend=True,
                   cluster_colors=None,
                   aspect='equal',
                   return_cmap=False, 
@@ -4658,9 +4667,15 @@ def plot_clusters(embed_viz,
                         label=clust_id);
         if legend:
             if legend_opt is None:
-                plt.legend()
-            else:
-                plt.legend(**legend_opt)
+                legend_opt = {}
+            plt.legend(**legend_opt)
+            if sort_legend:
+                # reorder legend labels
+                handles, labels = ax.get_legend_handles_labels()
+                labels = [int(x) for x in labels]
+                # sort both labels and handles by labels
+                labels, handles = zip(*sorted(zip(labels, handles), key=lambda t: t[0]))
+                ax.legend(handles, labels, **legend_opt)
     else:
         plt.scatter(embed_viz[:, 0], embed_viz[:, 1], c=cluster_colors, marker='.');
     plt.axis('off')
@@ -5025,8 +5040,8 @@ def logistic_regression(
                 nb_coef_plot = min(20, nb_coef)
                 labels = coef.index[:nb_coef_plot]
 
-                fig, ax = plt.subplots(figsize=figsize)
-                ax = coef.loc[labels, 'coef'].to_frame().plot.bar(ax=ax)
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax = coef.loc[labels, 'coef'].to_frame().plot.bar(ax=ax, color='#a6a6a6')
                 ax.hlines(y=0, xmin=0, xmax=nb_coef_plot-1, colors='gray', linestyles='dashed')
                 ticks_pos = np.linspace(start=0, stop=nb_coef_plot-1, num=nb_coef_plot)
                 # ticks_label = np.round(ticks_label, decimals=2)
