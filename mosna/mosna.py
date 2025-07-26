@@ -4024,7 +4024,8 @@ def get_reducer(
     min_dist=0.0, 
     force_recompute=False,
     save_reduced_coords=True, 
-    save_reducer=False, 
+    save_reducer=False,
+    return_path_coords=False, 
     random_state=None, 
     verbose=1,
     ):
@@ -4099,14 +4100,17 @@ def get_reducer(
             else:
                 embedding = data
 
+        path_coords = str(file_path) + '.npy'
         if save_reduced_coords:
             # save reduced coordinates
             data_dir.mkdir(parents=True, exist_ok=True)
-            np.save(str(file_path) + '.npy', embedding, allow_pickle=False, fix_imports=False)
+            np.save(path_coords, embedding, allow_pickle=False, fix_imports=False)
         if save_reducer:
             # save the reducer object
             joblib.dump(reducer, str(data_dir / "reducer") + '.pkl')
     
+    if return_path_coords:
+        return embedding, reducer, path_coords
     return embedding, reducer
 
 
