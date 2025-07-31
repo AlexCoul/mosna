@@ -1390,7 +1390,7 @@ def groups_assort_mixmat(
     # build index of patients and samples files
     if data_index is None:
         data_index = make_data_index(
-            nodes_dir,
+            net_dir,
             id_level_1,
             id_level_2, 
             extension,
