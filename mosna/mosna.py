@@ -19,6 +19,9 @@ from scipy import stats
 from scipy.stats import ttest_ind    # Welch's t-test
 from scipy.stats import mannwhitneyu # Mann-Whitney rank test
 from scipy.stats import ks_2samp     # Kolmogorov-Smirnov statistic
+import statsmodels.formula.api as smf
+from statsmodels.genmod.bayes_mixed_glm import BinomialBayesMixedGLM
+from statsmodels.tools.tools import add_constant
 from statsmodels.stats.multitest import fdrcorrection
 import statsmodels.api as sm
 from lifelines import KaplanMeierFitter, CoxPHFitter
@@ -31,8 +34,8 @@ from sklearn import linear_model
 from sklearn.model_selection import GridSearchCV, KFold
 from sklearn.metrics import confusion_matrix
 from sklearn.pipeline import make_pipeline
-from sklearn.exceptions import FitFailedWarning
-from sklearn.model_selection import train_test_split
+from sklearn.exceptions import FitFailedWarning, UndefinedMetricWarning
+from sklearn.model_selection import train_test_split, GroupKFold
 from sklearn import metrics
 from sklearn.decomposition._pca import PCA as PCA_type
 from sklearn.decomposition import PCA
@@ -45,6 +48,7 @@ import scanorama
 import colorcet as cc
 import re
 from typing import Optional, Any, List, Tuple, Union, Iterable, Callable, Dict, Set
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 from multiprocessing import cpu_count
 from dask.distributed import Client, LocalCluster, progress
@@ -2937,7 +2941,7 @@ def plot_pca(
     use_cols: Iterable = None,
     drop_cols: Iterable = None,
     show_var_names: bool = True,
-    figsize: Tuple = (7, 7),
+    figsize: Tuple = (5, 5),
     scale_coords: int = True,
     group_var: str = None,
     groups: Iterable = None,
@@ -2945,7 +2949,7 @@ def plot_pca(
     groups_color_mapper: dict = None,
     groups_label_mapper: dict = None,
     legend: bool = True,
-    legend_opt: dict = None,
+    legend_opt: dict = 'auto',
     show_grid: bool = True,
     ):
     """
@@ -2983,8 +2987,9 @@ def plot_pca(
         Dictionnary mapping each class to a label.
     legend : bool = True
         If True, display a legend.
-    legend_opt : dict = None
+    legend_opt : dict, or str
         Position of the legend.
+        If 'auto', sets the legend on the right of the axis.
     show_grid : bool = True
         If True, display a grid.
     """
@@ -3052,6 +3057,8 @@ def plot_pca(
             if legend_opt is None:
                 plt.legend()
             else:
+                if legend_opt == 'auto':
+                    legend_opt = {'loc': 'center left', 'bbox_to_anchor': (1.05, 0.5)}
                 plt.legend(**legend_opt)
     else:
         plt.scatter(score[:, 0]*scalex, embed_scoreviz[:, 1]*scaley, c=label_colors, marker='.');
@@ -3063,8 +3070,8 @@ def plot_pca(
                 plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, "Var"+str(i+1), color = 'g', ha = 'center', va = 'center')
             else:
                     plt.text(coeff[i,0]* 1.15, coeff[i,1] * 1.15, use_cols[i], color = 'g', ha = 'center', va = 'center')
-    plt.xlim(-1,1)
-    plt.ylim(-1,1)
+    # plt.xlim(-1,1)
+    # plt.ylim(-1,1)
     plt.xlabel(f"PC1 ({explained_var[0]:.1f}%)")
     plt.ylabel(f"PC2 ({explained_var[1]:.1f}%)")
     if show_grid:
@@ -3341,8 +3348,21 @@ def make_composed_variables(data, use_col=None, method='proportion', order=2):
     return new_data
 
 
-def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude_vars=None, composed_vars=False, 
-                    composed_order=2, test='Mann-Whitney', fdr_method='indep', alpha=0.05):
+def find_DE_markers(
+        data, 
+        group_ref, 
+        group_tgt, 
+        group_var, 
+        markers=None, 
+        exclude_vars=None, 
+        is_independent=True,
+        patient_col=None,
+        composed_vars=False, 
+        composed_order=2, 
+        test='Mann-Whitney', 
+        fdr_method='indep', 
+        alpha=0.05,
+        ):
     
 
     if composed_vars:
@@ -3379,25 +3399,40 @@ def find_DE_markers(data, group_ref, group_tgt, group_var, markers=None, exclude
     if exclude_vars is not None:
         markers = [x for x in markers if x not in exclude_vars]
     used_markers = []
-    for marker in markers:
-        dist_tgt = data.loc[select_tgt, marker].dropna()
-        dist_ref = data.loc[select_ref, marker].dropna()
-        # select = np.logical_and(np.isfinite(dist_tgt), np.isfinite(dist_ref))
-        # dist_tgt = dist_tgt[select]
-        # dist_ref = dist_ref[select]
-        if len(dist_tgt) > 0 and len(dist_ref) > 0:
-            if test == 'Mann-Whitney':
-                mwu_stat, pval = mannwhitneyu(dist_tgt, dist_ref)
-            if test == 'Welch':
-                w_stat, pval = ttest_ind(dist_tgt, dist_ref, equal_var=False)
-            if test == 'Kolmogorov-Smirnov': 
-                ks_stat, pval = ks_2samp(dist_tgt, dist_ref)
-            pvals.append(pval)
-            used_markers.append(marker)
-    pvals = pd.DataFrame(data=pvals, index=used_markers, columns=['pval'])
-    pvals = pvals.sort_values(by='pval', ascending=True)
+    if is_independent:
+        for marker in markers:
+            dist_tgt = data.loc[select_tgt, marker].dropna()
+            dist_ref = data.loc[select_ref, marker].dropna()
+            # select = np.logical_and(np.isfinite(dist_tgt), np.isfinite(dist_ref))
+            # dist_tgt = dist_tgt[select]
+            # dist_ref = dist_ref[select]
+            if len(dist_tgt) > 0 and len(dist_ref) > 0:
+                if test == 'Mann-Whitney':
+                    mwu_stat, pval = mannwhitneyu(dist_tgt, dist_ref)
+                if test == 'Welch':
+                    w_stat, pval = ttest_ind(dist_tgt, dist_ref, equal_var=False)
+                if test == 'Kolmogorov-Smirnov': 
+                    ks_stat, pval = ks_2samp(dist_tgt, dist_ref)
+                pvals.append(pval)
+                used_markers.append(marker)
+        pvals = pd.DataFrame(data=pvals, index=used_markers, columns=['pval'])
+        pvals = pvals.sort_values(by='pval', ascending=True)
+    else:
+        y = group_var  # binary outcome
+        X = data.loc[:, markers]
+        # Add intercept to fixed effects
+        X = add_constant(X)
+        # exog_vc: variance components for random intercepts
+        # One-hot encode patient IDs
+        patients_dummies = pd.get_dummies(data.loc[:, patient_col], drop_first=False)
+        # ident: all patient columns share the same variance parameter
+        ident = np.zeros(patients_dummies.shape[1], dtype=int)
+        # Fit Bayesian logistic mixed model
+        model = BinomialBayesMixedGLM(y, X, patients_dummies, ident)
+        result = model.fit_vb()  # variational Bayes for speed
+        pvals = result.summary().tables[0]
 
-    if fdr_method is not None:
+    if fdr_method is not None and is_independent:
         rejected, pval_corr = fdrcorrection(pvals['pval'], method=fdr_method)
         pvals['pval_corr'] = pval_corr
     
@@ -3558,7 +3593,7 @@ def plot_heatmap(
     center=None, 
     row_cluster=True, 
     col_cluster=True,
-    palette=None, 
+    palette='red_green', 
     figsize=(10, 10), 
     fontsize=10, 
     colors_ratio=0.03, 
@@ -3618,8 +3653,12 @@ def plot_heatmap(
         # select desired groups
         data = data.query(f'{group_var} in @groups')
         # make lut group <--> color
-        if palette is None:
-            palette = sns.color_palette()
+        if palette is not None:
+            if isinstance(palette, str) and palette == 'red_green':
+                palette = ['#F8766D', '#009E73']
+                # else palette is the standard name of a palette
+            elif isinstance(palette, str) and palette == 'default':
+                palette = sns.color_palette()
         lut = dict(zip(groups, palette))
         # Make the vector of colors
         colors = data[group_var].map(lut)
@@ -4867,6 +4906,7 @@ def logistic_regression(
     split_train_test=True,
     test_size=0.25,
     compare_null_model=True,
+    patient_data=None,
     dir_save=None,
     plot_coefs=True,
     save_plot_coefs=False,
@@ -4941,7 +4981,6 @@ def logistic_regression(
     # # select groups
     X = X.drop(columns=[y_name])
     var_idx = X.columns
-    # X = X.values
 
     start = time()
 
@@ -4968,12 +5007,15 @@ def logistic_regression(
         X_train = scaler.fit_transform(X_train)
         X_test = scaler.transform(X_test)
 
-        training_succeeded = False
-        cv_used = cv_train
-        while not training_succeeded and cv_used <= cv_max:
+        if patient_data is not None:
+            cv = GroupKFold(n_splits=cv_train)
+            import sklearn
+            sklearn.set_config(enable_metadata_routing=True)
+            groups=patient_data
+
             np.random.seed(0)
             clf = linear_model.LogisticRegressionCV(
-                cv=cv_used,
+                cv=cv,
                 Cs=20, 
                 penalty='elasticnet', 
                 # scoring='neg_log_loss', 
@@ -4983,27 +5025,73 @@ def logistic_regression(
                 max_iter=10000,
                 n_jobs=-1,  # or n_jobs-1 to leave one core available
             )
-            clf = clf.fit(X_train, y_train)
+            clf.fit(X, y, groups=groups)
             training_succeeded = not np.all(clf.coef_ == 0)
-            if not training_succeeded:
-                if cv_adapt:
-                    cv_used += 1
-                    print(f"        training failed, trying with cv = {cv_used}")
-                else:
-                    print(f"        training failed")
-                    break
+            sklearn.set_config(enable_metadata_routing=False)
+        else:
+            training_succeeded = False
+            cv_used = cv_train
+            while not training_succeeded and cv_used <= cv_max:
+                np.random.seed(0)
+                clf = linear_model.LogisticRegressionCV(
+                    cv=cv_used,
+                    Cs=20, 
+                    penalty='elasticnet', 
+                    # scoring='neg_log_loss', 
+                    scoring='roc_auc', 
+                    solver='saga', 
+                    l1_ratios=l1_ratios,
+                    max_iter=10000,
+                    n_jobs=-1,  # or n_jobs-1 to leave one core available
+                )
+                clf = clf.fit(X_train, y_train)
+                training_succeeded = not np.all(clf.coef_ == 0)
+                if not training_succeeded:
+                    if cv_adapt:
+                        cv_used += 1
+                        print(f"        training failed, trying with cv = {cv_used}")
+                    else:
+                        print(f"        training failed")
+                        break
         
         models[l1_name] = {'model': clf}
 
         if training_succeeded:
-            y_pred_proba = clf.predict_proba(X_test)[:, 1]
-            y_pred = clf.predict(X_test)
+            if patient_data is not None:
+                # Predictions using group-aware CV
+                y_pred_proba = y.copy()
+                y_pred_proba.iloc[:] = 0
+                y_pred = y.copy()
+                y_pred.iloc[:] = 0
+                for train_idx, test_idx in cv.split(X, y, groups):
+                    sklearn.set_config(enable_metadata_routing=True)
+                    clf_fold = linear_model.LogisticRegressionCV(
+                        cv=cv,
+                        Cs=[clf.C_[0]],
+                        penalty="elasticnet",
+                        solver="saga",
+                        l1_ratios=l1_ratios,
+                        scoring="roc_auc",
+                        max_iter=10000,
+                        n_jobs=-1
+                    )
+
+                    clf_fold.fit(X.loc[train_idx, :], y[train_idx], groups=groups[train_idx])
+                    y_pred_proba.loc[test_idx] = clf_fold.predict_proba(X.loc[test_idx, :])[:, 1]
+                    y_pred.loc[test_idx] = clf.predict(X.loc[test_idx, :])
+                    sklearn.set_config(enable_metadata_routing=False)
+
+            else:
+                y_pred_proba = clf.predict_proba(X_test)[:, 1]
+                y_pred = clf.predict(X_test)
 
             score = {
                 'ROC AUC': metrics.roc_auc_score(y_test, y_pred_proba),
                 'AP' : metrics.average_precision_score(y_test, y_pred_proba),
                 'MCC': metrics.matthews_corrcoef(y_test, y_pred),
             }
+            if score['ROC AUC'] <= 0.5:
+                compare_null_model = False
 
             # Save model coefficients and plots
             l1_ratio = np.round(clf.l1_ratio_[0], decimals=4)
