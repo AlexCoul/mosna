@@ -3456,6 +3456,7 @@ def plot_distrib_groups(
     group_names=None,
     multi_ind_to_col=False, 
     scale_data=False,
+    showfliers=False,
     figsize=(20, 6), 
     fontsize=20, 
     orientation=30, 
@@ -3552,7 +3553,7 @@ def plot_distrib_groups(
     # TODO: display variables on different axes if the have very differents ranges
     if plot_type == 'boxplot':
         sns.boxplot(x=var_name, y=value_name, hue=group_var, 
-                    data=long, palette=palette, ax=ax);
+                    data=long, palette=palette, ax=ax, showfliers=showfliers);
     elif plot_type == 'violinplot':
         sns.violinplot(x=var_name, y=value_name, hue=group_var, 
                        data=long, palette=palette, split=split, ax=ax);
@@ -4916,7 +4917,7 @@ def logistic_regression(
     plot_confusion_matrix=True,
     save_confusion_matrix=False,
     plot_ROC_curve=False,
-    save_ROC_curve=False,
+    save_ROC_curve=True,
     display_nsamples=True,
     str_prefix='',
     figsize=(8, 8),
@@ -5128,7 +5129,7 @@ def logistic_regression(
                 nb_coef_plot = min(20, nb_coef)
                 labels = coef.index[:nb_coef_plot]
 
-                fig, ax = plt.subplots(figsize=(10, 6))
+                fig, ax = plt.subplots(figsize=(nb_coef_plot, 6))
                 ax = coef.loc[labels, 'coef'].to_frame().plot.bar(ax=ax, color='#a6a6a6')
                 ax.hlines(y=0, xmin=0, xmax=nb_coef_plot-1, colors='gray', linestyles='dashed')
                 ticks_pos = np.linspace(start=0, stop=nb_coef_plot-1, num=nb_coef_plot)
